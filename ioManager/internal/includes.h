@@ -1,0 +1,21 @@
+// includes and define
+#include <stdio.h>
+#include <stdint.h>
+#include <cwchar>
+#include <queue>
+#include <memory>
+#include <random>
+#include <iostream>
+#include <iomanip>
+#include <sstream>
+#include <cstdint>
+#include <chrono>
+#include <thread>
+#include <mutex>
+#include <stack>
+#include <list>
+#include <atomic>
+#include <coroutine>
+#include <span>
+#include <semaphore>
+#include "ioManagerHardware.h"
