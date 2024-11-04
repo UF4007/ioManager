@@ -4,6 +4,25 @@
 #include "memManager/demo.h"
 #include "ioManager/ioManager.h"
 
+io::coTask jointest(io::coPara para)
+{
+    io::coPromise<> prom(para.mngr);
+    prom.setTimeout(std::chrono::milliseconds(1000));
+    task_await(prom);
+    co_return;
+}
+
+io::coTask benchmark_coroutine(io::coPara para)
+{
+    while (1)
+    {
+        io::coTask joint = jointest(para);
+        task_join(joint);
+        static int i = 0;
+        //std::cout << i++ << std::endl;    //watch cpu usage rate curve. it will be tidal.
+    }
+}
+
 io::coTask test_tcp_client(io::coPara para) {
     io::tcp_client_socket socket;
     io::coPromise<io::socketData> fu(para.mngr);
@@ -258,9 +277,9 @@ io::coTask test_http_client(io::coPara para)
     io::httpRequest request;
     request.method = "GET";
     request.url = "/";
-    request.httpVersion = "HTTP/1.0";
+    request.httpVersion = "HTTP/1.1";
 
-    request.addHeader("Host", "www.baidu.com");
+    request.addHeader("Host", "www.taobao.com");
     request.addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36");
     request.addHeader("Accept", "text/plain,*/*;q=0.8");
     //request.addHeader("Accept-Encoding", "gzip, deflate, br");
@@ -270,7 +289,7 @@ io::coTask test_http_client(io::coPara para)
     while (1)
     {
         io::http_client httpc(para);
-        io::coPromise<io::httpResponce> respon = httpc.send(para.mngr, &httpc, request, "www.baidu.com");
+        io::coPromise<io::httpResponce> respon = httpc.send(para.mngr, &httpc, request, "www.taobao.com");
 
         respon.setTimeout(std::chrono::seconds(7));
         io::httpResponce* resp = task_await(respon);
@@ -463,6 +482,17 @@ io::coTask test_mysql(io::coPara para){
 
 int main()
 {
+    //coroutine benchmark
+    if (false)
+    {
+        io::ioManager::auto_go(1);  //single thread
+        for (int i = 0; i < 1000000; i++)   //less than 1 us per task recircle when in 1M coroutines (condition: same timeout for each promise)
+        {
+            io::ioManager::auto_once(benchmark_coroutine);
+        }
+        std::this_thread::sleep_for(std::chrono::years(30));
+    }
+
     //montgomery test
     if (false)
     {
@@ -567,15 +597,13 @@ int main()
     //mem_testmain();
 
     //coroutine test
-    io::ioManager::auto_go(1);
-    io::ioManager::auto_once(test_http_client);
+    io::ioManager::auto_go(10);     //10 threads
+    io::ioManager::auto_once(test_tcp_server);
     for (int i = 0; i < 64; i++)
     {
         //io::ioManager::auto_once(test_tcp_client);
     }
-    while (1) {
-        std::this_thread::sleep_for(std::chrono::seconds(30));
-    }
+    std::this_thread::sleep_for(std::chrono::years(30));
 
     return 0;
 }
