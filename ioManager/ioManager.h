@@ -148,19 +148,48 @@ namespace io
         {
             __IO_INTERNAL_HEADER_PERMISSION
             struct promise_type {
-                inline coTask get_return_object() { return coTask{}; }
+                inline coTask get_return_object() { return coTask{ this }; }
 
                 inline std::suspend_never initial_suspend() { return {}; }
                 inline std::suspend_never final_suspend() noexcept { return {}; }
 
-                std::suspend_never yield_value() = delete;
+                inline std::suspend_always yield_value(coTask& task) noexcept { 
+                    assert(task.content->joining == nullptr || !"coTask has been join repeatedly");
+                    task.content->joining = std::coroutine_handle<promise_type>::from_promise(*this);
+                    return {};
+                };
 
-                inline void return_void() {}
+                inline void return_void() { 
+                    if (contentp)
+                        *contentp = nullptr;
+                    if (joining)
+                        joining.resume();
+                }
                 inline void unhandled_exception() { std::terminate(); }
+
+                std::coroutine_handle<promise_type> joining = nullptr;
+                coTask::promise_type** contentp;
             };
 
             using processPtr = coTask(*)(coPara);
+            inline coTask(coTask::promise_type* c) :content(c) { content->contentp = &this->content; }
+            coTask(const coTask&) = delete;
+            void operator=(const coTask&) = delete;
+            inline coTask(coTask&& right) { this->operator=((coTask&&)right); }
+            inline void operator=(coTask&& right) {
+                this->content = right.content;
+                if (right.content)
+                    right.content->contentp = &this->content;
+                right.content = nullptr;
+            }
+            inline ~coTask() {
+                if (this->content)
+                    this->content->contentp = nullptr;
+            }
+            coTask::promise_type* content;
         };
+//join, wait for specific task to return. it is not thread safe, yielder task and yieldee task must be in the same ioManager
+#define task_join(___cotask___) if(___cotask___.content)co_yield ___cotask___\
 
         enum class co_return_v {
             nothing,
@@ -248,6 +277,7 @@ namespace io
             bool reset();       //return value meaningless.
         };
 
+//thread safe task await.
 #define task_await(___cofuture___) ((___cofuture___.getLock()->test_and_set(std::memory_order_acquire) == false) ? (co_await io::coPromise<>::awaiterIntermediate(___cofuture___.getAwaiter())) : true) ?  ___cofuture___.getPointer() : nullptr\
 
         // manager of coroutine tasks
