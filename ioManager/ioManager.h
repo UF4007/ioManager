@@ -39,7 +39,7 @@ namespace io
         template <size_t _capacity>
         struct byteBuffer {
             char data[_capacity];
-            std::atomic<size_t> depleted = 0;
+            size_t depleted = 0;
             bool overflow = false;
             static constexpr size_t capacity = _capacity;
         };
@@ -224,18 +224,22 @@ namespace io
             void operator=(const coPromise<_T>& right);
             operator bool();
             inline bool operator==(void* opr) { return _base == opr; };
-            ~coPromise();           //asynchronously
+            ~coPromise();           //asynchronously safe
 
             template <typename _Duration>
-            io::err setTimeout(_Duration time);
+            io::err setTimeout(_Duration time);           //asynchronously safe
 
+            inline bool countCheck() {                       //if true, this count == 1, which means only this coroutine owns the promise.
+                uint32_t expected = 1;
+                return !_base->count.compare_exchange_strong(expected, 1);
+            }
             inline std::atomic_flag* getLock() { return &_base->lock; }
             inline lowlevel::awaiter* getAwaiter() { return _base; };
             _T* getPointer();
 
-            bool completable();     //asynchronously
-            io::err abort();        //asynchronously
-            io::err complete();     //asynchronously
+            bool completable();     //asynchronously safe
+            io::err abort();        //asynchronously safe
+            io::err complete();     //asynchronously safe
 
             inline bool isCompleted() { return !_base->aborted && _base->status == coStatus::completed; }
             inline bool isTimeout() { return !_base->aborted && _base->status == coStatus::timeout; }
@@ -934,6 +938,7 @@ namespace io
             }
         };
 
+        //not finished yet.
         class http_server {
             __IO_INTERNAL_HEADER_PERMISSION
             io::coPromise<io::tcp_client_socket> tcpc;

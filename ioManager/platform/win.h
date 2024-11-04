@@ -67,8 +67,7 @@ inline void io::volunteerDriver::selectDrive() {
 			}
 			if (FD_ISSET(key, &read_fds)) {
 				socketData* data = promise.getPointer();
-				size_t expect = -1;
-				if (data->depleted.compare_exchange_strong(expect, 0) == false)
+				if (data->depleted != -1)
 				{
 					if (data->depleted < data->capacity)
 					{
@@ -191,7 +190,10 @@ inline io::icmp_client_socket::icmp_client_socket() {
 	if (handle == INVALID_SOCKET)
 		throw std::runtime_error("socket get failed.");
 	else
+	{
 		volunteerDriver::socket_count++;
+		volunteerDriver::socket_count.notify_all();
+	}
 
 	u_long mode = 1;
 	ioctlsocket(handle, FIONBIO, &mode);
@@ -268,7 +270,10 @@ inline io::err io::tcp_client_socket::open() {
 		return io::err::failed;
 	}
 	else
+	{
 		volunteerDriver::socket_count++;
+		volunteerDriver::socket_count.notify_all();
+	}
 
 	u_long mode = 1;
 	ioctlsocket(handle, FIONBIO, &mode);
@@ -350,7 +355,10 @@ inline io::err io::tcp_server_socket::open() {
 		return io::err::failed;
 	}
 	else
+	{
 		volunteerDriver::socket_count++;
+		volunteerDriver::socket_count.notify_all();
+	}
 
 	u_long mode = 1;
 	ioctlsocket(handle, FIONBIO, &mode);
@@ -411,7 +419,10 @@ inline io::err io::udp_socket::open() {
 		return io::err::failed;
 	}
 	else
+	{
 		volunteerDriver::socket_count++;
+		volunteerDriver::socket_count.notify_all();
+	}
 
 	u_long mode = 1;
 	ioctlsocket(handle, FIONBIO, &mode);
