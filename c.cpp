@@ -1,9 +1,9 @@
 #include<stdio.h>
-#include<mariadb/mysql.h>
+//#include<mariadb/mysql.h>
 #define IO_USE_SELECT 1
 #include "memManager/demo.h"
 #include "ioManager/ioManager.h"
-//#include <Windows.h>
+
 io::coTask test_tcp_client(io::coPara para) {
     io::tcp_client_socket socket;
     io::coPromise<io::socketData> fu(para.mngr);
@@ -11,10 +11,8 @@ io::coTask test_tcp_client(io::coPara para) {
     sockaddr_in serverAddr;
     memset(&serverAddr, 0, sizeof(serverAddr));
     serverAddr.sin_family = AF_INET;
-    serverAddr.sin_port = htons(65387);
-    serverAddr.sin_addr.s_addr = inet_addr("43.153.216.196");
-    //serverAddr.sin_addr.s_addr = inet_addr("127.0.0.1");
-    //serverAddr.sin_addr.s_addr = inet_addr("192.168.142.128");
+    serverAddr.sin_port = htons(54321);
+    serverAddr.sin_addr.s_addr = inet_addr("127.0.0.1");
 
     static std::atomic<int> numSum = 0;
     int num = numSum.fetch_add(1);
@@ -91,7 +89,7 @@ io::coTask test_tcp_server(io::coPara para) {
     sockaddr_in server_addr{};
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = INADDR_ANY;
-    server_addr.sin_port = htons(65387);
+    server_addr.sin_port = htons(54321);
 
     if(server.bind(client_prom, server_addr) == io::err::failed)
         std::cerr << "Port is already in use.\n";
@@ -202,6 +200,9 @@ io::coTask testping(io::coPara para)
         }
 
         fu.reset();
+        fu.setTimeout(std::chrono::milliseconds(500));  //wait 500ms
+        task_await(fu);
+        fu.reset();
     }
 }
 
@@ -257,19 +258,19 @@ io::coTask test_http_client(io::coPara para)
     io::httpRequest request;
     request.method = "GET";
     request.url = "/";
-    request.httpVersion = "HTTP/1.1";
+    request.httpVersion = "HTTP/1.0";
 
-    request.addHeader("Host", "www.taobao.com");
+    request.addHeader("Host", "www.baidu.com");
     request.addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36");
     request.addHeader("Accept", "text/plain,*/*;q=0.8");
-    request.addHeader("Accept-Encoding", "gzip, deflate, br");
+    //request.addHeader("Accept-Encoding", "gzip, deflate, br");
     request.addHeader("Accept-Language", "en-US,en;q=0.9");
     request.addHeader("Connection", "keep-alive");
 
     while (1)
     {
         io::http_client httpc(para);
-        io::coPromise<io::httpResponce> respon = httpc.send(para.mngr, &httpc, request, "www.taobao.com");
+        io::coPromise<io::httpResponce> respon = httpc.send(para.mngr, &httpc, request, "www.baidu.com");
 
         respon.setTimeout(std::chrono::seconds(7));
         io::httpResponce* resp = task_await(respon);
@@ -362,7 +363,7 @@ io::coTask test_http_server_connect(io::coPara para, io::tcp_client_socket newSo
                     //std::cout << "HTTP server count: " << count.fetch_add(1) << std::endl; 
                     io::httpResponce resp;
                     resp.statusCode = 410;
-                    resp.reasonPhrase = "服务不可用";
+                    resp.reasonPhrase = "server unavailable.";
                     resp.httpVersion = "HTTP/1.1";
                     auto resp_str = resp.toString();
                     newSock.send(resp_str.c_str(), resp_str.size());
@@ -567,10 +568,10 @@ int main()
 
     //coroutine test
     io::ioManager::auto_go(1);
-    //io::ioManager::auto_once(test_mysql);
+    io::ioManager::auto_once(test_http_client);
     for (int i = 0; i < 64; i++)
     {
-        io::ioManager::auto_once(test_mysql);
+        //io::ioManager::auto_once(test_tcp_client);
     }
     while (1) {
         std::this_thread::sleep_for(std::chrono::seconds(30));
