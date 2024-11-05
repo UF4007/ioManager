@@ -161,9 +161,11 @@ namespace io
 
                 inline void return_void() { 
                     if (contentp)
+                    {
                         *contentp = nullptr;
-                    if (joining)
-                        joining.resume();
+                        if (joining)
+                            joining.resume();
+                    }
                 }
                 inline void unhandled_exception() { std::terminate(); }
 
