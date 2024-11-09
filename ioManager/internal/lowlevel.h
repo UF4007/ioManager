@@ -101,20 +101,34 @@ class lowlevel {
             awaiter* next = nullptr;    //"next" also acts as a singly linked list in ioManager::finishedAwaiter
         } node;                             //this node is protected by ioManager::spinLock_tm or ioManager::spinLock_fn.
         std::chrono::steady_clock::time_point timeout;
+        //awaiter** skipArrPtr = nullptr;
 
         std::atomic<uint32_t> count = 1;
-        std::atomic<io::coStatus> status = io::coStatus::idle;
-        bool aborted = false;
-        std::atomic_flag lock = ATOMIC_FLAG_INIT;
+
+        std::atomic_flag occupy_lock = ATOMIC_FLAG_INIT;
+        std::atomic_flag set_lock = ATOMIC_FLAG_INIT;
+
+        enum _status :char {
+            idle,
+            timing,
+            queueing
+        };
+        std::atomic<_status> status;
+        enum _set_status :char {
+            complete = 0,
+            aborted = 1,
+            timeouted = 2
+        }set_status;
         std::coroutine_handle<> coro = nullptr;
+
         io::ioManager* mngr;
 
         inline awaiter(io::ioManager *m) : mngr(m) {}
-        inline awaiter(awaiter&) = delete;
-        inline awaiter(awaiter&&) = delete;
-        ~awaiter();
+        awaiter(const awaiter&) = delete;
+        awaiter(awaiter&&) = delete;
         awaiter& operator=(const awaiter&) = delete;
         awaiter& operator=(awaiter&&) = delete;
+        ~awaiter();
     };
 };
 IO_SSO_HEAP_POOLING_DEFINE(io::lowlevel::shared_aflag_comm)

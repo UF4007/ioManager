@@ -4,13 +4,14 @@
 
 //awaiter
 inline io::lowlevel::awaiter::~awaiter() {
-	while (mngr->spinLock_tm.test_and_set(std::memory_order_acquire));
-	if (node.prev)													//remove timing
+	auto expected = awaiter::timing;
+	if (this->status.compare_exchange_strong(expected, awaiter::idle))
 	{
+		while (mngr->spinLock_tm.test_and_set(std::memory_order_acquire));
 		node.next->node.prev = node.prev;
 		node.prev->node.next = node.next;
+		mngr->spinLock_tm.clear(std::memory_order_release);
 	}
-	mngr->spinLock_tm.clear(std::memory_order_release);
 }
 
 
@@ -33,8 +34,7 @@ inline void io::coPromise<_T>::cdd() {
 				_T* mem2 = reinterpret_cast<_T*>(reinterpret_cast<char*>(_base) + sizeof(lowlevel::awaiter));
 				mem2->~_T();
 			}
-			auto expected = coStatus::ready;
-			if (_base->status.compare_exchange_strong(expected, coStatus::null) == false)
+			if (_base->status.load(std::memory_order_acquire) != lowlevel::awaiter::queueing)
 			{
 				lowlevel::awaiter* mem1 = _base;
 				mem1->~awaiter();
@@ -91,11 +91,13 @@ inline io::coPromise<_T>::operator bool() {
 }
 template <typename _T>
 template <typename _Duration>
-inline io::err io::coPromise<_T>::setTimeout(_Duration time) {
+inline io::err io::coPromise<_T>::setTimeout(_Duration time)
+{
+	if (isSet() == true)
+		return io::err::failed;
 	while (_base->mngr->spinLock_tm.test_and_set(std::memory_order_acquire));
-
-	auto expected = coStatus::idle;
-	if (_base->status.compare_exchange_strong(expected, coStatus::timing) == false)
+	auto expected = lowlevel::awaiter::idle;
+	if (_base->status.compare_exchange_strong(expected, lowlevel::awaiter::timing) == false)
 	{
 		_base->mngr->spinLock_tm.clear(std::memory_order_release);
 		return io::err::failed;
@@ -127,9 +129,55 @@ inline io::err io::coPromise<_T>::setTimeout(_Duration time) {
 	return io::err::ok;
 }
 template <typename _T>
-inline io::err io::coPromise<_T>::abort() {
-	_base->aborted = true;
-	return complete();
+inline void io::coPromise<_T>::complete_base()
+{
+	lowlevel::awaiter::_status expected = lowlevel::awaiter::timing, next;
+
+	if (_base->set_lock.test_and_set(std::memory_order_acq_rel))
+	{
+		next = lowlevel::awaiter::queueing;
+	}
+	else
+	{
+		next = lowlevel::awaiter::idle;
+	}
+
+	if (_base->status.compare_exchange_strong(expected, next))
+	{
+		while (_base->mngr->spinLock_tm.test_and_set(std::memory_order_acquire));
+		if (_base->node.prev)													//remove timing
+		{
+			_base->node.next->node.prev = _base->node.prev;
+			_base->node.prev->node.next = _base->node.next;
+			_base->node.prev = nullptr;
+		}
+		_base->mngr->spinLock_tm.clear(std::memory_order_release);
+	}
+
+	if (next == lowlevel::awaiter::queueing)
+	{
+		while (_base->mngr->spinLock_rd.test_and_set(std::memory_order_acquire));
+		_base->node.next = _base->mngr->readyAwaiter;
+		_base->mngr->readyAwaiter = _base;
+		_base->mngr->spinLock_rd.clear(std::memory_order_release);
+	}
+
+	_base->mngr->suspend_sem.release();
+}
+template <typename _T>
+inline void io::coPromise<_T>::abort() {
+	_base->set_status = lowlevel::awaiter::aborted;
+	complete_base();
+}
+template <typename _T>
+inline void io::coPromise<_T>::timeout() {
+	_base->set_status = lowlevel::awaiter::timeouted;
+	complete_base();
+}
+template <typename _T>
+inline void io::coPromise<_T>::complete() {
+	_base->set_status = lowlevel::awaiter::complete;
+	complete_base();
 }
 template <typename _T>
 inline _T* io::coPromise<_T>::getPointer() {
@@ -138,61 +186,227 @@ inline _T* io::coPromise<_T>::getPointer() {
 	return (_T*)(reinterpret_cast<char*>(_base) + sizeof(lowlevel::awaiter));
 }
 template <typename _T>
-inline bool io::coPromise<_T>::completable() {
-	auto status = _base->status.load();
-
-	if (status == coStatus::ready || status == coStatus::timeout || status == coStatus::completed)
-	{
-		return false;
-	}
-	return true;
-}
-template <typename _T>
-inline io::err io::coPromise<_T>::complete() {
-	auto status = coStatus::ready;
-	status = _base->status.exchange(status, std::memory_order_acquire);
-
-	if (status == coStatus::ready || status == coStatus::timeout || status == coStatus::completed)
-	{
-		_base->status.exchange(status, std::memory_order_acquire);
+inline io::err io::coPromise<_T>::canOccupy() {
+	if (this->_base->occupy_lock.test(std::memory_order_acquire) == true)
 		return io::err::failed;
-	}
-
-	while (_base->mngr->spinLock_tm.test_and_set(std::memory_order_acquire));
-	if (_base->node.prev)													//remove timing
-	{
-		_base->node.next->node.prev = _base->node.prev;
-		_base->node.prev->node.next = _base->node.next;
-		_base->node.prev = nullptr;
-	}
-
-	_base->mngr->spinLock_tm.clear(std::memory_order_release);
-
-	if (_base->lock.test_and_set(std::memory_order_acquire))
-	{
-		while (_base->mngr->spinLock_rd.test_and_set(std::memory_order_acquire));
-		_base->node.next = _base->mngr->readyAwaiter;
-		_base->mngr->readyAwaiter = _base;
-		_base->mngr->spinLock_rd.clear(std::memory_order_release);
-	}
-	else
-	{
-		_base->status = coStatus::completed;
-	}
-
-	_base->mngr->suspend_sem.release();
 	return io::err::ok;
 }
 template <typename _T>
+inline io::err io::coPromise<_T>::tryOccupy() {
+	if (this->_base->occupy_lock.test_and_set(std::memory_order_seq_cst) == true)
+		return io::err::failed;
+	return io::err::ok;
+}
+template <typename _T>
+inline void io::coPromise<_T>::unlockOccupy() {
+	this->_base->occupy_lock.clear(std::memory_order_release);
+}
+template <typename _T>
 inline bool io::coPromise<_T>::reset() {
-	assert(_base->coro == nullptr ||
-		!"awaiter ERROR: this awaiter is not vacancy.");
-	_base->node.next = nullptr;
-	_base->node.prev = nullptr;
-	_base->status = io::coStatus::idle;
-	_base->aborted = false;
-	_base->lock.clear(std::memory_order_release);
+	assert(this->isOwned() == false ||
+		!"awaiter ERROR: this awaiter is being owned by some other coroutine.");
+	_base->set_lock.clear(std::memory_order_release);
+	auto expected = lowlevel::awaiter::timing;
+	if (_base->status.compare_exchange_strong(expected, lowlevel::awaiter::idle))
+	{
+		while (_base->mngr->spinLock_tm.test_and_set(std::memory_order_acquire));
+		if (_base->node.prev)													//remove timing
+		{
+			_base->node.next->node.prev = _base->node.prev;
+			_base->node.prev->node.next = _base->node.next;
+			_base->node.prev = nullptr;
+			_base->node.next = nullptr;
+		}
+		_base->mngr->spinLock_tm.clear(std::memory_order_release);
+	}
+	else
+		_base->status.store(lowlevel::awaiter::idle, std::memory_order_release);
+	_base->set_status = lowlevel::awaiter::complete;
+	_base->occupy_lock.clear(std::memory_order_release);
 	return true;
+}
+template <typename _T>
+inline bool io::coPromise<_T>::isTiming()
+{
+	return _base->status.load(std::memory_order_relaxed) == lowlevel::awaiter::timing;
+}
+template <typename _T>
+inline bool io::coPromise<_T>::isOwned()
+{
+	return _base->coro.operator bool() || _base->status.load(std::memory_order_relaxed) == lowlevel::awaiter::queueing;
+}
+template <typename _T>
+inline bool io::coPromise<_T>::isSet()
+{
+	return _base->set_lock.test(std::memory_order_acquire) == true && !isOwned();
+}
+template <typename _T>
+inline bool io::coPromise<_T>::isCompleted()
+{
+	return isSet() && _base->set_status == lowlevel::awaiter::complete;
+}
+template <typename _T>
+inline bool io::coPromise<_T>::isTimeout()
+{
+	return isSet() && _base->set_status == lowlevel::awaiter::timeouted;
+}
+template <typename _T>
+inline bool io::coPromise<_T>::isAborted()
+{
+	return isSet() && _base->set_status == lowlevel::awaiter::aborted;
+}
+
+
+
+//coMultiplex
+template<typename T>
+inline io::coMultiplex::subTask io::coMultiplex::subCoro(io::coMultiplex* mul, io::coMultiplex::subTask::promise_type* next, coPromise<T> promise)
+{
+	io::coMultiplex::subTask::promise_type* prom_t;
+	co_yield prom_t;
+	while (prom_t->_pmul)
+	{
+		task_await(promise);						//await tag 1
+		if (prom_t->_pmul)
+		{
+			if (prom_t->_pmul->coro)
+			{
+				prom_t->_pmul->coro.resume();		//await tag 2
+			}
+			else
+			{
+				prom_t->_pending_next = prom_t->_pmul->pending;
+				prom_t->_pmul->pending = prom_t;
+				co_await std::suspend_always{};		//await tag 3
+			}
+		}
+		else
+			break;
+	}
+}
+template <typename Last>
+inline void io::coMultiplex::add(coPromise<Last>& last)
+{
+	subTask st = subCoro(this, this->first, last);
+	this->first = st._prom;
+}
+template <typename First, typename ...Remain>
+inline void io::coMultiplex::add(coPromise<First>& first, coPromise<Remain>&... remain)
+{
+	this->add(first);
+	this->add(remain...);
+}
+template <typename ...Args>
+inline io::coMultiplex::coMultiplex(coPromise<Args>&... arg)
+{
+	this->add(arg...);
+}
+inline io::coMultiplex::~coMultiplex()
+{
+	std::vector<subTask::promise_type*> pendingList;
+	subTask::promise_type* ptr = this->pending;
+
+	while (ptr)
+	{
+		pendingList.push_back(ptr);
+		ptr = ptr->_pending_next;
+	}
+
+	ptr = this->first;
+	while (ptr)
+	{
+		subTask::promise_type* i = ptr;
+		ptr = ptr->_next;
+		auto handle = std::coroutine_handle<subTask::promise_type>::from_promise(*i);
+		i->_pmul = nullptr;
+		if (std::find(pendingList.begin(), pendingList.end(), i) != pendingList.end())	//destroy subCoros which are awaiting tag 3
+		{
+			handle.resume();
+		}
+		else
+		{
+			if (i->_awa->coro == handle)												//destroy subCoros which are awaiting tag 1
+			{
+				lowlevel::awaiter* awa = i->_awa;
+				handle.resume();
+				awa->set_lock.clear(std::memory_order_release);
+			}
+			else																		//destroy subCoros which are awaiting tag 2
+			{
+				//do nothing...
+			}
+		}
+	}
+}
+inline bool io::coMultiplex::processAllPending()
+{
+	subTask::promise_type* ptr = this->pending;
+	this->pending = nullptr;
+
+	while (ptr)
+	{
+		subTask::promise_type* i = ptr;
+		ptr = ptr->_pending_next;
+		i->_pending_next = nullptr;
+		std::coroutine_handle<subTask::promise_type>::from_promise(*i).resume();
+	}
+
+	if (this->pending)
+		return false;			//try to awaite one or more promise failed, coMultiplex cannot be await.
+	else							//must handle and reset ALL promise to make them awaitable before multi_await.
+		return true;
+}
+template <typename T>
+inline io::err io::coMultiplex::remove(coPromise<T>& right)
+{
+	bool pending_found = false;
+
+	subTask::promise_type* ptr = this->pending;
+	subTask::promise_type** slot = &this->pending;
+
+	while (ptr)
+	{
+		if (ptr->_awa == right._base)
+		{
+			*slot = ptr->_pending_next;
+			pending_found = true;
+			break;
+		}
+		slot = &ptr->_pending_next;
+		ptr = ptr->_pending_next;
+	}
+
+	ptr = this->first;
+	slot = &this->first;
+	while (ptr)
+	{
+		if (ptr->_awa == right._base)
+		{
+			*slot = ptr->_next;
+			auto handle = std::coroutine_handle<subTask::promise_type>::from_promise(*ptr);
+			ptr->_pmul = nullptr;
+			if (pending_found)																//destroy subCoros which are awaiting tag 3
+			{
+				handle.resume();
+			}
+			else
+			{
+				if (ptr->_awa->coro == handle)												//destroy subCoros which are awaiting tag 1
+				{
+					handle.resume();
+					right._base->set_lock.clear(std::memory_order_release);
+				}
+				else																		//destroy subCoros which are awaiting tag 2
+				{
+					//do nothing...
+				}
+			}
+			return io::err::ok;
+		}
+		slot = &ptr->_next;
+		ptr = ptr->_next;
+	}
+	return io::err::failed;
 }
 
 
@@ -248,9 +462,11 @@ inline void io::ioManager::drive()
 			}
 			else
 			{
-				readys->status = coStatus::completed;
+				readys->status = lowlevel::awaiter::idle;
 				if (readys->coro)
 					readys->coro.resume();
+				else
+					readys->set_lock.test_and_set(std::memory_order_relaxed);
 			}
 			readys = next;
 			continue;
@@ -273,7 +489,8 @@ inline void io::ioManager::drive()
 				operat->node.prev->node.next = operat->node.next;
 				operat->node.prev = nullptr;
 				spinLock_tm.clear(std::memory_order_release);
-				operat->status = coStatus::timeout;
+				operat->status = lowlevel::awaiter::idle;
+				operat->set_status = lowlevel::awaiter::timeouted;
 				if (operat->coro)			//no need to lock bcs it is coroutine
 					operat->coro.resume();
 				continue;
@@ -296,10 +513,11 @@ inline void io::ioManager::drive()
 	}
 
 	//suspend
-	suspend_sem.try_acquire_until(suspend_next);
+	bool _nodiscard = suspend_sem.try_acquire_until(suspend_next);
 }
 inline void io::ioManager::go()
 {
+	assert(going == false || !"this ioManager had been launched.");
 	going = true;
 	isEnd.test_and_set(std::memory_order_acquire);
 	std::thread([this] {

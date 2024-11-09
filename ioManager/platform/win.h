@@ -11,7 +11,7 @@ inline void io::volunteerDriver::selectDrive() {
 	if (select_rbt.size())
 	{
 		for (auto& [key, promise] : select_rbt) {
-			if (promise.completable() == false)
+			if (promise.canOccupy() == io::err::failed)
 				continue;
 			FD_SET(key, &read_fds);
 			if (promise.getPointer()->depleted == -1)
@@ -27,7 +27,7 @@ inline void io::volunteerDriver::selectDrive() {
 	if (select_rbt_server.size())
 	{
 		for (auto& [key, promise] : select_rbt_server) {
-			if (promise.completable() == false)
+			if (promise.canOccupy() == io::err::failed)
 				continue;
 			FD_SET(key, &read_fds);
 			//FD_SET(key, &write_fds);
@@ -42,7 +42,7 @@ inline void io::volunteerDriver::selectDrive() {
 	if (select_rbt_udp.size())
 	{
 		for (auto& [key, promise] : select_rbt_udp) {
-			if (promise.completable() == false)
+			if (promise.canOccupy() == io::err::failed)
 				continue;
 			FD_SET(key, &read_fds);
 			//FD_SET(key, &write_fds);
@@ -62,6 +62,8 @@ inline void io::volunteerDriver::selectDrive() {
 		while (select_rbt_busy.test_and_set(std::memory_order_acquire));
 		for (auto& [key, promise] : select_rbt) {
 			if (FD_ISSET(key, &except_fds)) {
+				if (promise.tryOccupy() == io::err::failed)
+					continue;
 				promise.abort();
 				continue;
 			}
@@ -69,6 +71,8 @@ inline void io::volunteerDriver::selectDrive() {
 				socketData* data = promise.getPointer();
 				if (data->depleted != -1)
 				{
+					if (promise.tryOccupy() == io::err::failed)
+						continue;
 					if (data->depleted < data->capacity)
 					{
 						memset(data->data + data->depleted, 0, sizeof(data->data) - data->depleted);
@@ -77,12 +81,17 @@ inline void io::volunteerDriver::selectDrive() {
 							data->depleted += bytesReceived;
 						}
 						else
+						{
 							promise.abort();
+							continue;
+						}
 					}
+					promise.complete();
 				}
-				promise.complete();
 			}
 			if (FD_ISSET(key, &write_fds)) {
+				if (promise.tryOccupy() == io::err::failed)
+					continue;
 				promise.getPointer()->depleted = 0;
 				promise.complete();
 			}
@@ -93,6 +102,8 @@ inline void io::volunteerDriver::selectDrive() {
 		while (select_rbt_server_busy.test_and_set(std::memory_order_acquire));
 		for (auto& [key, promise] : select_rbt_server) {
 			if (FD_ISSET(key, &read_fds)) {
+				if (promise.tryOccupy() == io::err::failed)
+					continue;
 				tcp_client_socket* prom_client = promise.getPointer();
 				prom_client->close();
 				prom_client->handle = accept(key, nullptr, nullptr);
@@ -111,6 +122,8 @@ inline void io::volunteerDriver::selectDrive() {
 		while (select_rbt_udp_busy.test_and_set(std::memory_order_acquire));
 		for (auto& [key, promise] : select_rbt_udp) {
 			if (FD_ISSET(key, &read_fds)) {
+				if (promise.tryOccupy() == io::err::failed)
+					continue;
 				socketDataUdp* data = promise.getPointer();
 				if (data->depleted < data->capacity)
 				{
@@ -121,12 +134,19 @@ inline void io::volunteerDriver::selectDrive() {
 						data->depleted += bytesReceived;
 					}
 					else
+					{
+						promise.unlockOccupy();
 						continue;
+					}
 				}
 				promise.complete();
 			}
 		}
 		select_rbt_udp_busy.clear();
+	}
+	else
+	{
+		result = WSAGetLastError();
 	}
 }
 

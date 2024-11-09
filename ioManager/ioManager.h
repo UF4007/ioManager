@@ -1,5 +1,5 @@
 /* driver library for cross-platform IoT dev.
- * ------Head-Only------, but may not, depends on the driver your need.
+ * ------Head-Only------
  * 
  * for unifying various interfaces and their multiplexing provided by controllers, systems even computers.
  * 
@@ -129,15 +129,6 @@ namespace io
 
         // ----------------------------------coroutine---------------------------------
 
-        enum class coStatus :uint8_t {
-            null = 0,
-            idle = 1,
-            timing = 2,
-            ready = 3,
-            completed = 4,
-            timeout = 5
-        };
-
 #include "internal/lowlevel.h"
 
         struct coPara {
@@ -191,7 +182,7 @@ namespace io
             coTask::promise_type* content;
         };
 //join, wait for specific task to return. it is not thread safe, yielder task and yieldee task must be in the same ioManager
-#define task_join(___cotask___) if(___cotask___.content)co_yield ___cotask___\
+#define task_join(___cotask___) if((___cotask___).content)co_yield ___cotask___\
 
         enum class co_return_v {
             nothing,
@@ -199,11 +190,26 @@ namespace io
             abort
         };
 
+        /*
+        * productor:(many threads assumed. in single productor thread and never reentry scenraio, tryOccupy() is not necessary actually.)
+        * 
+        *                                                                                                            |abort();
+        *                       tryOccupy();----------------------------------------------------------------------->{ complete();------------>
+        *                             |              Occupying                                                       |timeout();             |
+        * -----------------------------------------------------------------------------------------------------------+---------------------------
+        * consumer: (coroutine thread, ioManager)                                                                 ---\
+        *                        |                             |                             |                        \                    <-+
+        *                        |             idle            |            timing           |           owned         \__>     be   set     |
+        *                        |                             |                             |                                             __|
+        *               coPromise(ioManager);           setTimeout(duration)            task_await()                                       reset
+        *                   construct
+        */
         template <typename _T = void>
         class coPromise
         {
             __IO_INTERNAL_HEADER_PERMISSION
             void cdd();
+            void complete_base();
             lowlevel::awaiter* _base = nullptr;
         public:
             struct promise_type {
@@ -217,9 +223,9 @@ namespace io
                 inline std::suspend_never initial_suspend() { return {}; }
                 inline std::suspend_never final_suspend() noexcept { return {}; }
 
-                inline std::suspend_never yield_value(coPromise<_T>& returnvl) { returnvl = prom; return {}; }
+                inline std::suspend_never yield_value(coPromise<_T>& returnvl) { returnvl = prom; return {}; }      //for visit the promise_type obj of this coroutine.
 
-                inline void return_value(co_return_v ret = co_return_v::nothing) {
+                inline void return_value(co_return_v ret = co_return_v::complete) {
                     switch (ret)
                     {
                     case co_return_v::complete:
@@ -232,20 +238,13 @@ namespace io
                 }
                 inline void unhandled_exception() { std::terminate(); }
             };
-            struct awaiterIntermediate
+            struct awaiterIntermediate      //msvc can co_await a reference of awaitable object, but gcc/clang can't
             {
                 lowlevel::awaiter* _a;
                 inline awaiterIntermediate(lowlevel::awaiter* awt) { _a = awt; }
                 inline bool await_ready() const noexcept { return false; }
-                inline void await_suspend(std::coroutine_handle<> h)
-                {
-                    _a->coro = h;
-                }
-                inline bool await_resume() noexcept
-                {
-                    _a->coro = nullptr;
-                    return true;
-                }
+                inline void await_suspend(std::coroutine_handle<> h) { _a->coro = h; }
+                inline bool await_resume() noexcept { _a->coro = nullptr; return true; }
             };
 
             coPromise() = default;
@@ -257,30 +256,98 @@ namespace io
             inline bool operator==(void* opr) { return _base == opr; };
             ~coPromise();           //asynchronously safe
 
-            template <typename _Duration>
-            io::err setTimeout(_Duration time);           //asynchronously safe
+            inline ioManager* getManager() { if (_base) return _base->mngr; else return nullptr; };
 
-            inline bool countCheck() {                       //if true, this count == 1, which means only this coroutine owns the promise.
+            io::err canOccupy();    //asynchronously safe
+            io::err tryOccupy();    //asynchronously safe
+            void unlockOccupy();    //only use it when the complete(set) event does not actually happen.
+            void abort();           //asynchronously safe, set promise to abort
+            void complete();        //asynchronously safe, set promise to complete
+            void timeout();         //asynchronously safe, set promise to timeout
+
+
+            //functions beneath are only allowed used in ioManager thread.
+            template <typename _Duration>
+            io::err setTimeout(_Duration time);
+
+            inline bool countCheck() {                       //if true, this count == 1, which means only this coroutine handle the promise.
                 uint32_t expected = 1;
                 return !_base->count.compare_exchange_strong(expected, 1);
             }
-            inline std::atomic_flag* getLock() { return &_base->lock; }
+            inline std::atomic_flag* getLock() { return &_base->set_lock; }
             inline lowlevel::awaiter* getAwaiter() { return _base; };
             _T* getPointer();
 
-            bool completable();     //asynchronously safe
-            io::err abort();        //asynchronously safe
-            io::err complete();     //asynchronously safe
-
-            inline bool isCompleted() { return !_base->aborted && _base->status == coStatus::completed; }
-            inline bool isTimeout() { return !_base->aborted && _base->status == coStatus::timeout; }
-            inline bool isAborted() { return _base->aborted; }
+            bool isTiming();
+            bool isOwned();
+            bool isSet();
+            bool isCompleted();
+            bool isTimeout();
+            bool isAborted();
 
             bool reset();       //return value meaningless.
         };
 
 //thread safe task await.
-#define task_await(___cofuture___) ((___cofuture___.getLock()->test_and_set(std::memory_order_acquire) == false) ? (co_await io::coPromise<>::awaiterIntermediate(___cofuture___.getAwaiter())) : true) ?  ___cofuture___.getPointer() : nullptr\
+#define task_await(___cofuture___) (((___cofuture___).getLock()->test_and_set(std::memory_order_acq_rel) == false) ? (co_await io::coPromise<>::awaiterIntermediate((___cofuture___).getAwaiter())) : true) ?  (___cofuture___).getPointer() : nullptr\
+
+        //multiplex awaiter, an awaiter group. When ANY awaiter in coMultiplex is set, the coMultiplex will be resumed.
+        // not thread safe. All the coPromise in it must be in the same ioManager.
+        class coMultiplex{
+            struct subTask {
+                struct promise_type {
+                    template <typename T>
+                    inline promise_type(coMultiplex* mul, promise_type* next, coPromise<T> promise) { _pmul = mul; _next = next; _awa = promise._base; }
+                    inline subTask get_return_object() { return subTask{ this }; }
+
+                    inline std::suspend_never initial_suspend() { return {}; }
+                    inline std::suspend_never final_suspend() noexcept { return {}; }
+
+                    inline std::suspend_never yield_value(promise_type*& returnvl) noexcept { returnvl = this; return {}; }     //for visit the promise_type obj of this coroutine.
+
+                    inline void return_void() {}
+                    inline void unhandled_exception() { std::terminate(); }
+                    coMultiplex* _pmul;         //if this multiplex object about to be deconstructed, this pointer will be nullptr.
+                    promise_type* _next;
+                    promise_type* _pending_next = nullptr;
+                    lowlevel::awaiter* _awa;
+                };
+                inline subTask(promise_type* prom) { _prom = prom; }
+                promise_type* _prom;
+            };
+            template<typename T>
+            static subTask subCoro(coMultiplex* mul, subTask::promise_type* next, coPromise<T> promise);   //auxiliary coroutine delegates each coPromise. this coroutine's lifetime follows the coMultiplex object.
+            std::coroutine_handle<> coro = nullptr;
+            subTask::promise_type* first = nullptr;
+            subTask::promise_type* pending = nullptr;
+        public:
+            struct awaiterIntermediate {
+                coMultiplex* _a;
+                inline awaiterIntermediate(coMultiplex* awt) { _a = awt; }
+                inline bool await_ready() const noexcept { return false; }
+                inline void await_suspend(std::coroutine_handle<> h) { _a->coro = h; }
+                inline void await_resume() noexcept { _a->coro = nullptr; }
+            };
+            template <typename ...Args>
+            coMultiplex(coPromise<Args>&... arg);
+            coMultiplex(const coMultiplex&) = delete;
+            void operator=(const coMultiplex&) = delete;
+            coMultiplex(coMultiplex&&) = delete;            //all of those promise_type s record this coMultiplex pointer.
+            void operator=(coMultiplex&&) = delete;
+            ~coMultiplex();
+
+            bool processAllPending();		                //make sure that all the subCoros are not awaiting in await tag 3.
+
+            template <typename Last>
+            void add(coPromise<Last>& last);
+            template <typename First, typename ...Remain>
+            void add(coPromise<First>& first, coPromise<Remain>&... remain);
+            template <typename T>
+            err remove(coPromise<T>& right);
+        };
+
+//if ANY coPromise is be in complete(set) status, this continues.
+#define task_multi_await(___comultiplex___) if((___comultiplex___).processAllPending())co_await io::coMultiplex::awaiterIntermediate(&___comultiplex___)\
 
         // manager of coroutine tasks
         //  a ioManager == a thread
@@ -295,7 +362,7 @@ namespace io
             std::atomic_flag spinLock_pd = ATOMIC_FLAG_INIT;    //pending task
 
             lowlevel::awaiter* readyAwaiter = nullptr;
-            std::atomic_flag spinLock_rd = ATOMIC_FLAG_INIT;    //pending to continue (includes completed or aborted awaiter)
+            std::atomic_flag spinLock_rd = ATOMIC_FLAG_INIT;    //queueing to continue (includes completed or aborted awaiter)
 
             std::atomic_flag isEnd = ATOMIC_FLAG_INIT;
             std::atomic<bool> going = false;

@@ -23,6 +23,83 @@ io::coTask benchmark_coroutine(io::coPara para)
     }
 }
 
+io::coTask randomFunc(io::coPara para, io::coPromise<> prom)
+{
+    //prom.complete(); //primary status of coMultiplex
+    static int num = 1;
+    int n = num++;
+    io::coPromise<> timer(para.mngr);
+    while (1)
+    {
+        int i = rand() % 300 + 1;
+        timer.reset();
+        timer.setTimeout(std::chrono::milliseconds(i));
+        task_await(timer);
+        prom.complete();
+        std::cout << "rand send: " << n << ", await during: " << i << std::endl;
+    }
+}
+
+void randomFunc2(io::coPara para, io::coPromise<> prom)
+{
+    static int num = 1;
+    int n = num++;
+    while (1)
+    {
+        int i = rand() % 3000;
+        std::this_thread::sleep_for(std::chrono::nanoseconds(i));
+        if (prom.tryOccupy() == io::err::ok)
+        {
+            std::cout << "rand send: " << n << ", await during: " << i << std::endl;
+            prom.complete();
+        }
+    }
+}
+
+io::coTask test_multi(io::coPara para)
+{
+    //single thread
+    //io::coPromise<> rand1(para.mngr);
+    //randomFunc(para, rand1);
+    //io::coPromise<> rand2(para.mngr);
+    //randomFunc(para, rand2);
+    //io::coPromise<> rand3(para.mngr);
+    //randomFunc(para, rand3);
+
+    //multi thread
+    io::coPromise<> rand1(para.mngr);
+    std::thread(randomFunc2, para, rand1).detach();
+    io::coPromise<> rand2(para.mngr);
+    std::thread(randomFunc2, para, rand2).detach();
+    io::coPromise<> rand3(para.mngr);
+    std::thread(randomFunc2, para, rand3).detach();
+
+    while (1)
+    {
+        io::coMultiplex multi(rand1, rand2, rand3);         //memory leak test, deconstruct and reconstruct constantly.
+        task_multi_await(multi);
+        std::cout << "triggered!" << std::endl;
+        if (rand1.isSet())
+        {
+            std::cout << "rand recv: 1" << std::endl;
+            rand1.reset();
+        }
+        if (rand2.isSet())
+        {
+            std::cout << "rand recv: 2" << std::endl;
+            rand2.reset();
+        }
+        if (rand3.isSet())
+        {
+            std::cout << "rand recv: 3" << std::endl;
+            rand3.reset();
+        }
+        multi.remove(rand1);
+        multi.remove(rand2);
+        multi.remove(rand3);
+    }
+}
+
 io::coTask test_tcp_client(io::coPara para) {
     io::tcp_client_socket socket;
     io::coPromise<io::socketData> fu(para.mngr);
@@ -493,6 +570,14 @@ int main()
         std::this_thread::sleep_for(std::chrono::years(30));
     }
 
+    //coMulti test
+    if (true)
+    {
+        io::ioManager::auto_go(1);
+        io::ioManager::auto_once(test_multi);
+        std::this_thread::sleep_for(std::chrono::years(30));
+    }
+
     //montgomery test
     if (false)
     {
@@ -598,10 +683,10 @@ int main()
 
     //coroutine test
     io::ioManager::auto_go(10);     //10 threads
-    io::ioManager::auto_once(test_tcp_server);
+    //io::ioManager::auto_once(test_udp_server);
     for (int i = 0; i < 64; i++)
     {
-        //io::ioManager::auto_once(test_tcp_client);
+        io::ioManager::auto_once(test_udp_client);
     }
     std::this_thread::sleep_for(std::chrono::years(30));
 

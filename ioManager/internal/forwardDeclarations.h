@@ -1,5 +1,6 @@
 #define __IO_INTERNAL_HEADER_PERMISSION																friend class lowlevel;\
 													template <typename _TypeA>						friend class coPromise;\
+																									friend class coMultiplex;\
 																									friend class ioManager;\
 																									friend class volunteerDriver;\
 																									friend class netif;\
