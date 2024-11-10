@@ -1072,7 +1072,7 @@ namespace io
 #elif defined(__linux__)
 #include "platform/linux.h"
 #ifdef _mysql_h
-    #include "platform/iomysql.h"        //we must use select to do things un-blocking
+    #include "platform/iomysql.h"        //we must use select() to do things un-blocking
 #endif
 #elif defined(ESP_PLATFORM)
 #include "platform/esp32.h"

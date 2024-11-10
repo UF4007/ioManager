@@ -133,6 +133,8 @@ inline void io::coPromise<_T>::complete_base()
 {
 	lowlevel::awaiter::_status expected = lowlevel::awaiter::timing, next;
 
+	bool timer_execute_by_manager_thread_just_now = false;
+
 	if (_base->set_lock.test_and_set(std::memory_order_acq_rel))
 	{
 		next = lowlevel::awaiter::queueing;
@@ -151,15 +153,21 @@ inline void io::coPromise<_T>::complete_base()
 			_base->node.prev->node.next = _base->node.next;
 			_base->node.prev = nullptr;
 		}
+		else
+			timer_execute_by_manager_thread_just_now = true;
 		_base->mngr->spinLock_tm.clear(std::memory_order_release);
 	}
 
 	if (next == lowlevel::awaiter::queueing)
 	{
-		while (_base->mngr->spinLock_rd.test_and_set(std::memory_order_acquire));
-		_base->node.next = _base->mngr->readyAwaiter;
-		_base->mngr->readyAwaiter = _base;
-		_base->mngr->spinLock_rd.clear(std::memory_order_release);
+		if (timer_execute_by_manager_thread_just_now == false)
+		{
+			_base->status.store(lowlevel::awaiter::queueing, std::memory_order_release);
+			while (_base->mngr->spinLock_rd.test_and_set(std::memory_order_acquire));
+			_base->node.next = _base->mngr->readyAwaiter;
+			_base->mngr->readyAwaiter = _base;
+			_base->mngr->spinLock_rd.clear(std::memory_order_release);
+		}
 	}
 
 	_base->mngr->suspend_sem.release();
@@ -205,7 +213,6 @@ template <typename _T>
 inline bool io::coPromise<_T>::reset() {
 	assert(this->isOwned() == false ||
 		!"awaiter ERROR: this awaiter is being owned by some other coroutine.");
-	_base->set_lock.clear(std::memory_order_release);
 	auto expected = lowlevel::awaiter::timing;
 	if (_base->status.compare_exchange_strong(expected, lowlevel::awaiter::idle))
 	{
@@ -214,14 +221,15 @@ inline bool io::coPromise<_T>::reset() {
 		{
 			_base->node.next->node.prev = _base->node.prev;
 			_base->node.prev->node.next = _base->node.next;
-			_base->node.prev = nullptr;
-			_base->node.next = nullptr;
 		}
 		_base->mngr->spinLock_tm.clear(std::memory_order_release);
 	}
 	else
 		_base->status.store(lowlevel::awaiter::idle, std::memory_order_release);
+	_base->node.prev = nullptr;
+	_base->node.next = nullptr;
 	_base->set_status = lowlevel::awaiter::complete;
+	_base->set_lock.clear(std::memory_order_release);
 	_base->occupy_lock.clear(std::memory_order_release);
 	return true;
 }
@@ -493,6 +501,8 @@ inline void io::ioManager::drive()
 				operat->set_status = lowlevel::awaiter::timeouted;
 				if (operat->coro)			//no need to lock bcs it is coroutine
 					operat->coro.resume();
+				else
+					readys->set_lock.test_and_set(std::memory_order_relaxed);
 				continue;
 			}
 			else
