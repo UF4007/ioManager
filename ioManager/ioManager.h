@@ -182,7 +182,7 @@ namespace io
             coTask::promise_type* content;
         };
 //join, wait for specific task to return. it is not thread safe, yielder task and yieldee task must be in the same ioManager
-#define task_join(___cotask___) if((___cotask___).content)co_yield ___cotask___\
+#define task_join(___cotask___) if((___cotask___).content)co_yield ___cotask___
 
         enum class co_return_v {
             nothing,
@@ -209,6 +209,7 @@ namespace io
         {
             __IO_INTERNAL_HEADER_PERMISSION
             void cdd();
+            void complete_base_local();
             void complete_base();
             lowlevel::awaiter* _base = nullptr;
         public:
@@ -248,10 +249,13 @@ namespace io
             };
 
             coPromise() = default;
+            coPromise(coPromiseStack<_T> &stack);
             template <typename ...Args>
             coPromise(ioManager* m, Args&&... consArgs);
-            coPromise(const coPromise<_T>& right);
-            void operator=(const coPromise<_T>& right);
+            coPromise(const coPromise<_T>& right) noexcept;
+            void operator=(const coPromise<_T> &right) noexcept;
+            coPromise(coPromise<_T> &&right) noexcept;
+            void operator=(coPromise<_T> &&right) noexcept;
             operator bool();
             inline bool operator==(void* opr) { return _base == opr; };
             ~coPromise();           //asynchronously safe
@@ -276,7 +280,11 @@ namespace io
             }
             inline std::atomic_flag* getLock() { return &_base->set_lock; }
             inline lowlevel::awaiter* getAwaiter() { return _base; };
-            _T* getPointer();
+            _T* data();
+
+            void abortLocal();      //local functions conserve once call of coroutine::resume(), once ready queueing and lock cost
+            void completeLocal();
+            void timeoutLocal();
 
             bool isTiming();
             bool isOwned();
@@ -287,12 +295,33 @@ namespace io
 
             bool reset();       //return value meaningless.
         };
+        
+        // coPromise on controllable memory, no need to use dynamic malloc
+        template <typename _T = void>
+        struct coPromiseStack
+        {
+            __IO_INTERNAL_HEADER_PERMISSION
+            lowlevel::awaiter _awa;
+            _T _content;
+            template <typename... Args>
+            coPromiseStack(ioManager *m, Args &&...consArgs);
+            // inline operator coPromise<_T>(){ return coPromise<_T>(*this); }
+            // inline ~coPromiseStack() { assert(_awa.count.load() == 1 || !"coPromiseStack ERROR: coPromiseStack is going to release but someone else is holding!"); } // you can handle the memory well, as you promised.
+        };
+
+        template <>
+        struct coPromiseStack<void>
+        {
+            __IO_INTERNAL_HEADER_PERMISSION
+            lowlevel::awaiter _awa;
+            inline coPromiseStack(ioManager *m) : _awa(m){}
+        };
 
 //thread safe task await.
-#define task_await(___cofuture___) (((___cofuture___).getLock()->test_and_set(std::memory_order_acq_rel) == false) ? (co_await io::coPromise<>::awaiterIntermediate((___cofuture___).getAwaiter())) : true) ?  (___cofuture___).getPointer() : nullptr\
+#define task_await(___cofuture___) (((___cofuture___).getLock()->test_and_set(std::memory_order_acq_rel) == false) ? (co_await io::coPromise<>::awaiterIntermediate((___cofuture___).getAwaiter())) : true) ?  (___cofuture___).data() : nullptr
 
-        //multiplex awaiter, an awaiter group. When ANY awaiter in coMultiplex is set, the coMultiplex will be resumed.
-        // not thread safe. All the coPromise in it must be in the same ioManager.
+        // multiplex awaiter, an awaiter group. When ANY awaiter in coMultiplex is set, the coMultiplex will be resumed.
+        //  not thread safe. All the coPromise in it must be in the same ioManager.
         class coMultiplex{
             struct subTask {
                 struct promise_type {
@@ -328,6 +357,7 @@ namespace io
                 inline void await_suspend(std::coroutine_handle<> h) { _a->coro = h; }
                 inline void await_resume() noexcept { _a->coro = nullptr; }
             };
+            inline coMultiplex() {}
             template <typename ...Args>
             coMultiplex(coPromise<Args>&... arg);
             coMultiplex(const coMultiplex&) = delete;
@@ -351,7 +381,7 @@ namespace io
 
         // manager of coroutine tasks
         //  a ioManager == a thread
-        class ioManager final
+        struct ioManager final
         {
             __IO_INTERNAL_HEADER_PERMISSION
 
@@ -428,8 +458,8 @@ namespace io
             inline static std::atomic_flag select_rbt_server_busy = ATOMIC_FLAG_INIT;       //tcp server (accept)
             inline static std::map<uint64_t, coPromise<socketDataUdp>> select_rbt_udp;
             inline static std::atomic_flag select_rbt_udp_busy = ATOMIC_FLAG_INIT;          //udp, raw socket
-#elif IO_USE_IOCP
 #elif IO_USE_EPOLL
+#elif IO_USE_IOCP
 #else
             static_assert(false, "io manager compile ERROR: cannot find io multiplexing strategy.")
 #endif
@@ -439,8 +469,8 @@ namespace io
             static void go();
 
             static void selectDrive();
-            static void iocpDrive();
             static void epollDrive();
+            static void iocpDrive();
         };
 
 
@@ -542,6 +572,8 @@ namespace io
 
 
         // -------------------------------network io--------------------------------
+        
+        using mac_addr = char[6];
 
         // abstract class, system network interface.
         //  ESP32:    esp_netif_t*
@@ -906,7 +938,7 @@ namespace io
                 {
                     io::dns_data mes;
                     mes.fromChar(data->data, data->depleted);
-                    mes.getIp(*promise.getPointer());
+                    mes.getIp(*promise.data());
                     data->depleted = 0;
                     promise.complete();
                 }
@@ -956,7 +988,7 @@ namespace io
 
                 if (thisp->fu.isCompleted())
                 {
-                    httpResponce *prom_resp = ret.getPointer();
+                    httpResponce *prom_resp = ret.data();
                     std::string request = req.toString();
                     thisp->tcp.send(request.c_str(), request.length());
                     while (1)
@@ -1005,7 +1037,7 @@ namespace io
 
                     if (thisp->fu.isCompleted())
                     {
-                        httpResponce* prom_resp = ret.getPointer();
+                        httpResponce* prom_resp = ret.data();
                         std::string request = req.toString();
                         thisp->tcp.send(request.c_str(), request.length());
                         while (1)
@@ -1058,7 +1090,7 @@ namespace io
                 // server_addr.sin_addr.s_addr = INADDR_ANY;
                 // server_addr.sin_port = htons(port);
 
-                // client_connect* conn = promise.getPointer();
+                // client_connect* conn = promise.data();
                 return io::err::ok;
             }
         };
@@ -1071,15 +1103,14 @@ namespace io
 #include "platform\win.h"       //windows special backslash!
 #elif defined(__linux__)
 #include "platform/linux.h"
-#ifdef _mysql_h
-    #include "platform/iomysql.h"        //we must use select() to do things un-blocking
-#endif
+// #ifdef _mysql_h
+//     #include "platform/iomysql.h"        //deprecated.
+// #endif
 #elif defined(ESP_PLATFORM)
 #include "platform/esp32.h"
 #endif
 
 #include "internal/definitions.h"
 #include "internal/BigIntDefinition.h"
-
-    }
+        }
 }

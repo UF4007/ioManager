@@ -1,5 +1,6 @@
 //volunteerDriver
 inline void io::volunteerDriver::selectDrive() {
+    std::cout << "select move"<<std::endl;
 	static fd_set read_fds, write_fds, except_fds;
 	FD_ZERO(&read_fds);
 	FD_ZERO(&write_fds);
@@ -14,7 +15,7 @@ inline void io::volunteerDriver::selectDrive() {
 			if (promise.canOccupy() == io::err::failed)
 				continue;
 			FD_SET(key, &read_fds);
-			if (promise.getPointer()->depleted == -1)
+			if (promise.data()->depleted == -1)
 				FD_SET(key, &write_fds);
 			FD_SET(key, &except_fds);
 		}
@@ -68,7 +69,7 @@ inline void io::volunteerDriver::selectDrive() {
 				continue;
 			}
 			if (FD_ISSET(key, &read_fds)) {
-				socketData* data = promise.getPointer();
+				socketData* data = promise.data();
 				if (data->depleted != -1)
 				{
 					if (promise.tryOccupy() == io::err::failed)
@@ -92,7 +93,7 @@ inline void io::volunteerDriver::selectDrive() {
 			if (FD_ISSET(key, &write_fds)) {
 				if (promise.tryOccupy() == io::err::failed)
 					continue;
-				promise.getPointer()->depleted = 0;
+				promise.data()->depleted = 0;
 				promise.complete();
 			}
 		}
@@ -104,12 +105,12 @@ inline void io::volunteerDriver::selectDrive() {
 			if (FD_ISSET(key, &read_fds)) {
 				if (promise.tryOccupy() == io::err::failed)
 					continue;
-				tcp_client_socket* prom_client = promise.getPointer();
+				tcp_client_socket* prom_client = promise.data();
 				prom_client->close();
 				prom_client->handle = accept(key, nullptr, nullptr);
 				volunteerDriver::socket_count++;
 				coPromise<socketData> data(promise._base->mngr);
-				data.getPointer()->depleted = -1;
+				data.data()->depleted = -1;
 				while (select_rbt_busy.test_and_set(std::memory_order_acquire));
 				volunteerDriver::select_rbt.insert(std::pair<uint64_t, coPromise<socketData>>((uint64_t)prom_client->handle, data));
 				select_rbt_busy.clear();
@@ -124,7 +125,7 @@ inline void io::volunteerDriver::selectDrive() {
 			if (FD_ISSET(key, &read_fds)) {
 				if (promise.tryOccupy() == io::err::failed)
 					continue;
-				socketDataUdp* data = promise.getPointer();
+				socketDataUdp* data = promise.data();
 				if (data->depleted < data->capacity)
 				{
 					int len = sizeof(data->addr);
@@ -303,7 +304,7 @@ inline io::err io::tcp_client_socket::connect(coPromise<socketData>& promise, co
 	if (handle == INVALID_SOCKET)
 		return io::err::failed;
 
-	promise.getPointer()->depleted = -1;
+	promise.data()->depleted = -1;
 	::connect(handle, (sockaddr*)&addr, sizeof(addr));
 
 	while (volunteerDriver::select_rbt_busy.test_and_set(std::memory_order_acquire));

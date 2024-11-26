@@ -16,7 +16,13 @@ inline io::lowlevel::awaiter::~awaiter() {
 
 
 
-//coPromise
+// coPromise
+template <typename _T>
+inline io::coPromise<_T>::coPromise(coPromiseStack<_T> &stack)
+{
+    _base = &stack._awa;
+    (_base->count)++;
+}
 template <typename _T>
 template <typename ...Args, typename U>
 inline io::coPromise<_T>::promise_type::promise_type(ioManager* m, Args&&... consArgs) :prom(m, std::forward<Args>(consArgs)...) {}
@@ -57,13 +63,15 @@ inline io::coPromise<_T>::coPromise(ioManager* m, Args&&... consArgs) {
 	}
 	else
 	{
-		_base = (lowlevel::awaiter*)::operator new(sizeof(lowlevel::awaiter) + sizeof(_T));
+		constexpr size_t alignment = std::max(alignof(lowlevel::awaiter), alignof(_T));
+		_base = (lowlevel::awaiter*)::operator new(sizeof(lowlevel::awaiter) + sizeof(_T), std::align_val_t(alignment));
 		new (_base)lowlevel::awaiter(m);
 		new (reinterpret_cast<char*>(_base) + sizeof(lowlevel::awaiter))_T(std::forward<Args>(consArgs)...);
 	}
 }
 template <typename _T>
-inline io::coPromise<_T>::coPromise(const coPromise<_T>& right) {
+inline io::coPromise<_T>::coPromise(const coPromise<_T>& right) noexcept
+{
 	_base = right._base;
 	if (_base)
 	{
@@ -71,7 +79,8 @@ inline io::coPromise<_T>::coPromise(const coPromise<_T>& right) {
 	}
 }
 template <typename _T>
-void io::coPromise<_T>::operator=(const coPromise<_T>& right) {
+void io::coPromise<_T>::operator=(const coPromise<_T>& right) noexcept
+{
 	if (&right == this)
 		return;
 	cdd();
@@ -80,6 +89,18 @@ void io::coPromise<_T>::operator=(const coPromise<_T>& right) {
 	{
 		(_base->count)++;
 	}
+}
+template <typename _T>
+inline io::coPromise<_T>::coPromise(coPromise<_T> &&right) noexcept : _base(right._base)
+{
+    right._base = nullptr;
+}
+template <typename _T>
+void io::coPromise<_T>::operator=(coPromise<_T> &&right) noexcept
+{
+    cdd();
+    this->_base = right._base;
+    right._base = nullptr;
 }
 template <typename _T>
 inline io::coPromise<_T>::~coPromise() {
@@ -173,6 +194,40 @@ inline void io::coPromise<_T>::complete_base()
 	_base->mngr->suspend_sem.release();
 }
 template <typename _T>
+inline void io::coPromise<_T>::complete_base_local()
+{
+	lowlevel::awaiter::_status expected = lowlevel::awaiter::timing, next;
+
+	if (_base->set_lock.test_and_set(std::memory_order_acq_rel))
+	{
+		next = lowlevel::awaiter::queueing;
+	}
+	else
+	{
+		next = lowlevel::awaiter::idle;
+	}
+
+	if (_base->status.compare_exchange_strong(expected, lowlevel::awaiter::idle))
+	{
+		while (_base->mngr->spinLock_tm.test_and_set(std::memory_order_acquire));
+		if (_base->node.prev)													//remove timing
+		{
+			_base->node.next->node.prev = _base->node.prev;
+			_base->node.prev->node.next = _base->node.next;
+			_base->node.prev = nullptr;
+		}
+		_base->mngr->spinLock_tm.clear(std::memory_order_release);
+	}
+
+	if (next == lowlevel::awaiter::queueing)
+	{
+		if (_base->coro)
+			_base->coro.resume();
+	}
+
+	_base->mngr->suspend_sem.release();
+}
+template <typename _T>
 inline void io::coPromise<_T>::abort() {
 	_base->set_status = lowlevel::awaiter::aborted;
 	complete_base();
@@ -188,7 +243,22 @@ inline void io::coPromise<_T>::complete() {
 	complete_base();
 }
 template <typename _T>
-inline _T* io::coPromise<_T>::getPointer() {
+inline void io::coPromise<_T>::abortLocal() {
+	_base->set_status = lowlevel::awaiter::aborted;
+	complete_base_local();
+}
+template <typename _T>
+inline void io::coPromise<_T>::timeoutLocal() {
+	_base->set_status = lowlevel::awaiter::timeouted;
+	complete_base_local();
+}
+template <typename _T>
+inline void io::coPromise<_T>::completeLocal() {
+	_base->set_status = lowlevel::awaiter::complete;
+	complete_base_local();
+}
+template <typename _T>
+inline _T* io::coPromise<_T>::data() {
 	if constexpr (std::is_same_v<_T, void>)
 		return nullptr;
 	return (_T*)(reinterpret_cast<char*>(_base) + sizeof(lowlevel::awaiter));
@@ -263,6 +333,13 @@ inline bool io::coPromise<_T>::isAborted()
 {
 	return isSet() && _base->set_status == lowlevel::awaiter::aborted;
 }
+
+
+
+//coPromiseStack
+template <typename _T>
+template <typename... Args>
+inline io::coPromiseStack<_T>::coPromiseStack(ioManager *m, Args &&...consArgs) : _awa(m), _content(std::forward<Args>(consArgs)...) {}
 
 
 
@@ -348,6 +425,7 @@ inline io::coMultiplex::~coMultiplex()
 }
 inline bool io::coMultiplex::processAllPending()
 {
+	assert(this->first != nullptr || !"cannot await a null coMultiplex.");
 	subTask::promise_type* ptr = this->pending;
 	this->pending = nullptr;
 

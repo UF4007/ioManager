@@ -11,6 +11,7 @@
 #include <iomanip>
 #include <sstream>
 #include <cstdint>
+#include <cstring>
 #include <chrono>
 #include <thread>
 #include <mutex>
@@ -20,4 +21,5 @@
 #include <coroutine>
 #include <span>
 #include <semaphore>
+#include <algorithm>
 #include "ioManagerHardware.h"
