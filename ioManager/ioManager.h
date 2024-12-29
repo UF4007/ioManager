@@ -320,6 +320,15 @@ namespace io
 //thread safe task await.
 #define task_await(___cofuture___) (((___cofuture___).getLock()->test_and_set(std::memory_order_acq_rel) == false) ? (co_await io::coPromise<>::awaiterIntermediate((___cofuture___).getAwaiter())) : true) ?  (___cofuture___).data() : nullptr
 
+//just delay
+#define task_delay(___delayer___, ___chrono____) \
+    do                                           \
+    {                                            \
+        ___delayer___.reset();                   \
+        ___delayer___.setTimeout(___chrono____);              \
+        task_await(___delayer___);               \
+    } while (0)
+
         // multiplex awaiter, an awaiter group. When ANY awaiter in coMultiplex is set, the coMultiplex will be resumed.
         //  not thread safe. All the coPromise in it must be in the same ioManager.
         class coMultiplex{
