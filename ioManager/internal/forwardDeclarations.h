@@ -1,20 +1,14 @@
 #define __IO_INTERNAL_HEADER_PERMISSION																friend class lowlevel;\
-                                                    template <typename _T2>                         friend struct coPromiseStack;\
-													template <typename _TypeA>						friend class coPromise;\
-																									friend class coMultiplex;\
+                                                    template <typename _T2>   						friend struct coPromiseStack;\
+													template <typename _T2>   						friend class coPromise;\
+													template <typename _T2>   						friend struct coAsync;\
+																									friend class coSelector;\
 																									friend struct ioManager;\
-																									friend class volunteerDriver;\
-																									friend class netif;\
-																									friend class icmp_client_socket;\
-																									friend class tcp_client_socket;\
-																									friend class tcp_server_socket;\
-																									friend class udp_socket;\
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------
 template <typename _T> class coPromise;
 template <typename _T> struct coPromiseStack;
+template <typename _T> struct coAsync;
 struct ioManager;
-struct protCtl;
-template <typename _T> struct ioChannel;
-template <typename _T> class ioSelector;
-class tcp_client_socket;
+class coSelector;
+template <typename OutT, typename InT> struct ioChannel;

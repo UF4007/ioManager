@@ -1,6 +1,4 @@
-constexpr int http_port = 80;
-
-struct httpRequest {
+struct request {
     std::string method;
     std::string url;
     std::string httpVersion;
@@ -8,10 +6,10 @@ struct httpRequest {
     std::string body;
 
     size_t maxHeader = 100;
-    size_t maxBuffer = IO_SOCKET_BUFFER_SIZE * 2;
+    size_t maxBuffer = 8196 * 2;
     size_t maxBody = 20000;
 
-    inline httpRequest() : method("GET"), httpVersion("HTTP/1.1") {}
+    inline request() : method("GET"), httpVersion("HTTP/1.1") {}
 
     inline void addHeader(const std::string& key, const std::string& value) {
         headers[key] = value;
@@ -205,7 +203,7 @@ private:
     int chunk = -1;
 };
 
-struct httpResponce {
+struct responce {
     std::string httpVersion;
     int statusCode = 0;
     std::string reasonPhrase;
@@ -213,7 +211,7 @@ struct httpResponce {
     std::string body;
 
     size_t maxHeader = 100;
-    size_t maxBuffer = IO_SOCKET_BUFFER_SIZE * 2;
+    size_t maxBuffer = 8196 * 2;
     size_t maxBody = 1000000;
 
     inline void addHeader(const std::string& key, const std::string& value) {
