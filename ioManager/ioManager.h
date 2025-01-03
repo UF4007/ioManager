@@ -294,9 +294,9 @@ namespace io
                 inline void unhandled_exception() { std::terminate(); }
             };
 
-            coAsync<_T>(const coAsync<_T>&) = delete;
-            coAsync<_T>(coAsync<_T>&&) = delete;
-            coAsync<_T>& operator=(const coAsync<_T>&) = delete;
+            coAsync(const coAsync<_T>&) = delete;
+            coAsync(coAsync<_T>&&) = delete;
+            void operator=(const coAsync<_T>&) = delete;
             void operator=(coAsync<_T>&&) = delete;
         private:
             template<typename T>
