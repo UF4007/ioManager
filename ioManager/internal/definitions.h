@@ -44,13 +44,7 @@ inline void io::coPromise<_T>::cdd() {
 			{
 				lowlevel::awaiter* mem1 = _base;
 				mem1->~awaiter();
-				if constexpr (std::is_same_v<_T, void>)
-					::operator delete(_base);
-				else
-				{
-					constexpr size_t alignment = std::max(alignof(lowlevel::awaiter), alignof(_T));
-					::operator delete(_base, std::align_val_t(alignment));
-				}
+				::operator delete(_base);
 			}
 		}
 	}
@@ -69,8 +63,7 @@ inline io::coPromise<_T>::coPromise(ioManager* m, Args&&... consArgs) {
 	}
 	else
 	{
-		constexpr size_t alignment = std::max(alignof(lowlevel::awaiter), alignof(_T));
-		_base = (lowlevel::awaiter*)::operator new(sizeof(lowlevel::awaiter) + sizeof(_T), std::align_val_t(alignment));
+		_base = (lowlevel::awaiter*)::operator new(sizeof(lowlevel::awaiter) + sizeof(_T));
 		new (_base)lowlevel::awaiter(m);
 		new (reinterpret_cast<char*>(_base) + sizeof(lowlevel::awaiter))_T(std::forward<Args>(consArgs)...);
 	}
@@ -286,7 +279,7 @@ inline void io::coPromise<_T>::unlockOccupy() {
 	this->_base->occupy_lock.clear(std::memory_order_release);
 }
 template <typename _T>
-inline bool io::coPromise<_T>::reset() {
+inline void io::coPromise<_T>::reset() {
 	assert(this->isOwned() == false ||
 		!"awaiter ERROR: this awaiter is being owned by some other coroutine.");
 	auto expected = lowlevel::awaiter::timing;
@@ -307,7 +300,7 @@ inline bool io::coPromise<_T>::reset() {
 	_base->set_status = lowlevel::awaiter::resolve;
 	_base->set_lock.clear(std::memory_order_release);
 	_base->occupy_lock.clear(std::memory_order_release);
-	return true;
+	return;
 }
 template <typename _T>
 inline bool io::coPromise<_T>::isTiming() const
@@ -364,7 +357,7 @@ inline io::coSelector::subTask io::coSelector::subCoro(io::coSelector* mul, io::
 	co_yield prom_t;
 	while (prom_t->_pmul)
 	{
-		task_await(promise);						//await tag 1
+		co_await *promise;						//await tag 1
 		if (prom_t->_pmul)
 		{
 			if (prom_t->_pmul->coro)
@@ -669,86 +662,4 @@ inline void io::ioManager::auto_once(coTask::processPtr ptr)
 	int i = getPendingFromAll();
 	all[i].pendingTask.push(ptr);
 	all[i].spinLock_pd.clear(std::memory_order_release);
-}
-
-
-
-//ioChannel
-template<typename OutT, typename InT>
-template<typename ...Args>
-io::ioChannel<OutT, InT>::promise_type::promise_type(ioManager* mngr, Args&&... args)
-{
-	prom_vl.in_handle = io::coPromise<InT>(mngr);
-}
-template<typename OutT, typename InT>
-inline io::ioChannel<OutT, InT>::ioChannel(promise_type* prom): promise(prom) {}
-template<typename OutT, typename InT>
-inline io::coPromise<InT>* io::ioChannel<OutT, InT>::operator->()
-{
-	return &(promise->prom_vl.in_handle);
-}
-template<typename OutT, typename InT>
-inline std::vector<io::coPromise<OutT>>& io::ioChannel<OutT, InT>::get_slot()
-{
-	return promise->prom_vl.out_slot;
-}
-template<typename OutT, typename InT>
-inline io::coPromise<InT>& io::ioChannel<OutT, InT>::get_in_promise()
-{
-	return promise->prom_vl.in_handle;
-}
-template<typename OutT, typename InT>
-inline io::ioChannel<OutT, InT>::ioChannel(const ioChannel& right) noexcept
-{
-	promise = right.promise;
-	if (promise)
-	{
-		(promise->count)++;
-	}
-}
-template<typename OutT, typename InT>
-inline void io::ioChannel<OutT, InT>::operator=(const ioChannel& right) noexcept
-{
-	if (&right == this)
-		return;
-	cdd();
-	promise = right.promise;
-	if (promise)
-	{
-		(promise->count)++;
-	}
-}
-template<typename OutT, typename InT>
-inline io::ioChannel<OutT, InT>::ioChannel(ioChannel&& right) noexcept : promise(right.promise)
-{
-	right.promise = nullptr;
-}
-template<typename OutT, typename InT>
-inline void io::ioChannel<OutT, InT>::operator=(ioChannel&& right) noexcept
-{
-	cdd();
-	this->promise = right.promise;
-	right.promise = nullptr;
-}
-template<typename OutT, typename InT>
-inline io::ioChannel<OutT, InT>::~ioChannel() noexcept
-{
-	cdd();
-}
-template<typename OutT, typename InT>
-inline void io::ioChannel<OutT, InT>::cdd() noexcept
-{
-	if (promise)
-	{
-		if (promise->count-- == 1)
-		{
-			promise->prom_vl.destroy = true;
-			if (promise->prom_vl.in_handle.tryOccupy() == io::err::ok)
-			{
-				promise->prom_vl.in_handle.rejectLocal();
-			}
-		}
-		std::coroutine_handle<promise_type> h = std::coroutine_handle<promise_type>::from_promise(*promise);
-		h.destroy();
-	}
 }

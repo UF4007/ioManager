@@ -5,8 +5,6 @@
  * 
  * ---EXPERIMENTAL LIBRARY---
  * 
- * Considering: use LVGL for display support
- * 
  * Licensed under the MIT License.
  * Looking forward to visiting https://github.com/UF4007/ to propose issues, pull your device driver, and make ioManager stronger and more universal.
 */
@@ -34,20 +32,17 @@ namespace io
             formaterr = 7,      //format error
         };
 
-        using duration_ms = std::chrono::duration<unsigned long long, std::milli>;
-
-        template <size_t _capacity>
-        struct byteBuffer {
-            static constexpr size_t capacity = _capacity;
-
-            size_t size() { return depleted; }
-            size_t remain() { return capacity - depleted; }
-            char* data() { return _data; }
-            char* push_ptr() { return _data + depleted; }
-            bool push_size(size_t size) { depleted += size; return (depleted > capacity ? depleted = capacity : false); }
-            void clear() { depleted = 0; }
+        struct buffer {
+            inline buffer(size_t capacity) { this->capacity = capacity; _data.resize(capacity); }
+            inline size_t size() { return depleted; }
+            inline size_t remain() { return capacity - depleted; }
+            inline char* data() { return _data.data(); }
+            inline char* push_ptr() { return _data.data() + depleted; }
+            inline bool push_size(size_t size) { depleted += size; return (depleted > capacity ? depleted = capacity : false); }
+            inline void clear() { depleted = 0; }
         private:
-            char _data[_capacity];
+            size_t capacity;
+            std::string _data;
             size_t depleted = 0;
         };
 
@@ -172,6 +167,7 @@ namespace io
         *               coPromise(ioManager);           setTimeout(duration)            task_await()                                       reset
         *                   construct
         */
+        // one promise can only be awaited by one coroutine.
         template <typename _T = void>
         class coPromise
         {
@@ -181,13 +177,20 @@ namespace io
             void complete_base();
             lowlevel::awaiter* _base = nullptr;
         public:
-            struct awaiterIntermediate      //msvc can co_await a reference of awaitable object, but gcc/clang can't
+            struct awaitable
             {
-                lowlevel::awaiter* _a;
-                inline awaiterIntermediate(lowlevel::awaiter* awt) { _a = awt; }
-                inline bool await_ready() const noexcept { return false; }
-                inline void await_suspend(std::coroutine_handle<> h) { _a->coro = h; }
-                inline bool await_resume() noexcept { _a->coro = nullptr; return true; }
+                inline awaitable(coPromise<_T>* prom) :_prom(prom) {}
+                inline bool await_ready() noexcept { 
+                    if (_prom->_base->set_lock.test_and_set(std::memory_order_acq_rel) == false)
+                        return false;
+                    waited = false;
+                    return true;
+                }
+                inline void await_suspend(std::coroutine_handle<> h) { _prom->_base->coro = h; }
+                inline _T* await_resume() noexcept { if (waited)_prom->_base->coro = nullptr; return _prom->data(); }
+            private:
+                coPromise<_T>* _prom;
+                bool waited = true;
             };
 
             coPromise() = default;
@@ -216,13 +219,19 @@ namespace io
             //functions beneath are only allowed used in ioManager thread.
             template <typename _Duration>
             io::err setTimeout(_Duration time);
+            template <typename _Duration>
+            inline awaitable delay(_Duration time)
+            {
+                this->setTimeout(time);
+                return this->operator*();
+            }
 
             inline bool countCheck() {                       //if true, this count == 1, which means only this coroutine handle the promise.
                 uint32_t expected = 1;
                 return !_base->count.compare_exchange_strong(expected, 1);
             }
-            inline std::atomic_flag* getLock() { return &_base->set_lock; }
-            inline lowlevel::awaiter* getAwaiter() { return _base; };
+            inline awaitable operator*() { return { this }; }
+            inline awaitable getAwaiter() { return { this }; }
             _T* data();
 
             void rejectLocal();      //local functions conserve once call of coroutine::resume(), once ready queueing and lock cost
@@ -236,7 +245,7 @@ namespace io
             bool isTimeout() const;
             bool isReject() const;
 
-            bool reset();       //return value meaningless.
+            void reset();
         };
         
         // coPromise on controllable memory, no need to use dynamic malloc
@@ -257,18 +266,6 @@ namespace io
             lowlevel::awaiter _awa;
             inline coPromiseStack(ioManager *m) : _awa(m){}
         };
-
-//thread safe task await (multi-producer, one consumer). A coPromise can be only awaited by one coroutine.
-#define task_await(___cofuture___) (((___cofuture___).getLock()->test_and_set(std::memory_order_acq_rel) == false) ? (co_await io::coPromise<>::awaiterIntermediate((___cofuture___).getAwaiter())) : true) ?  (___cofuture___).data() : nullptr
-
-//delay for certain duration
-#define task_delay(___delayer___, ___chrono____) \
-    do                                           \
-    {                                            \
-        ___delayer___.reset();                   \
-        ___delayer___.setTimeout(___chrono____);              \
-        task_await(___delayer___);               \
-    } while (0)
 
         template <typename _T = void>
         struct coAsync: public coPromise<_T>
@@ -333,12 +330,18 @@ namespace io
             subTask::promise_type* first = nullptr;
             subTask::promise_type* pending = nullptr;
         public:
-            struct awaiterIntermediate {
+            struct awaitable {
                 coSelector* _a;
-                inline awaiterIntermediate(coSelector* awt) { _a = awt; }
-                inline bool await_ready() const noexcept { return false; }
+                bool waited = true;
+                inline awaitable(coSelector* awt) { _a = awt; }
+                inline bool await_ready() noexcept {
+                    if (_a->processAllPending())
+                        return false;
+                    waited = false;
+                    return true;
+                }
                 inline void await_suspend(std::coroutine_handle<> h) { _a->coro = h; }
-                inline void await_resume() noexcept { _a->coro = nullptr; }
+                inline void await_resume() noexcept { if (waited)_a->coro = nullptr; }
             };
             inline coSelector() {}
             template <typename ...Args>
@@ -350,6 +353,8 @@ namespace io
             ~coSelector();
 
             bool processAllPending();		                //make sure that all the subCoros are not awaiting in await tag 3.
+            inline awaitable operator*() { return { this }; }
+            inline awaitable getAwaiter() { return { this }; }
 
             template <typename Last>
             void add(coPromise<Last>& last);
@@ -358,9 +363,6 @@ namespace io
             template <typename T>
             err remove(coPromise<T>& right);
         };
-
-//if ANY coPromise is be in complete(set) status, this continues.
-#define task_multi_await(___coSelector___) if((___coSelector___).processAllPending())co_await io::coSelector::awaiterIntermediate(&___coSelector___)\
 
         // manager of coroutine tasks
         //  a ioManager == a thread
@@ -410,205 +412,167 @@ namespace io
         };
         inline std::deque<ioManager> ioManager::all = {};
 
-        // channel, state machine, protocol
-        // a reference count of promise_type was handled by ioChannel.
-            // !!! co_yield to get promise_value at first time !!!
-            //  this coroutine cannot exit before "promise_value::destroy" turns to true, else UB.
-            //  when ioChannel reference count turns to 0, coroutine will be deconstructing, the parameter "promise_value::destroy" will turn true, and prom_in will emit a reject event. The coroutine will be destroyed during the next wait.
-            //  use ioChannel for multi-thread usage (out of current ioManager) is UB.
-        template<typename OutT, typename InT>
-        struct ioChannel {
-            struct promise_value {
-                std::vector<io::coPromise<OutT>> out_slot;  //not owned by this ioChannel
-                io::coPromise<InT> in_handle;               //lifetime owned by this ioChannel(coroutine)
-                bool destroy = false;
-            };
-            struct promise_type {
-                inline ioChannel<OutT, InT> get_return_object() { return ioChannel<OutT, InT>(this); }
-
-                inline std::suspend_never initial_suspend() { return {}; }
-                inline std::suspend_always final_suspend() noexcept { return {}; }
-
-                template<typename ...Args>
-                promise_type(ioManager* mngr, Args&&... args);
-
-                inline std::suspend_never yield_value(promise_value** returnvl) { *returnvl = &prom_vl; return {}; }      //for visit the promise_type obj of this coroutine.
-
-                inline void return_void() noexcept {}
-                inline void unhandled_exception() { std::terminate(); }
-
-                promise_value prom_vl;
-                size_t count = 1;
-            };
-
-            coPromise<InT>* operator->();
-            friend inline io::ioChannel<OutT, InT>& operator<<(io::coPromise<OutT>& bind, io::ioChannel<OutT, InT>& channel)
-            {
-                channel.get_slot().push_back(bind);
-                return channel;
-            }
-            template<typename _T>
-            friend inline io::ioChannel<OutT, InT>& operator<<(io::ioChannel<_T, OutT>& bind, io::ioChannel<OutT, InT>& channel)
-            {
-                channel.get_slot().push_back(bind.get_in_promise());
-                return channel;
-            }
-
-            std::vector<io::coPromise<OutT>>& get_slot();
-            io::coPromise<InT>& get_in_promise();
-
-            ioChannel(const ioChannel&) noexcept;
-            void operator=(const ioChannel&) noexcept;
-            ioChannel(ioChannel&&) noexcept;
-            void operator=(ioChannel&&) noexcept;
-            ~ioChannel() noexcept;
-        protected:
-            inline ioChannel() :promise(nullptr) {}
-        private:
-            ioChannel(promise_type *prom);
-            promise_type* promise;
-            void cdd() noexcept;
-        };
-
 
 
         // -------------------------------channel/protocol--------------------------------
 
-        namespace http {
-#include "protocol/http.h"
-            ioChannel<request, std::span<uint8_t>> request_praser(ioManager* m)
-            {
-                using promise_value = ioChannel<request, std::span<uint8_t>>::promise_value;
-                promise_value* pv;
-                co_yield &pv;
-                request req;
-                while (1)
+        namespace tcp {
+            struct socket : public asio::ip::tcp::socket {
+                template<typename ...Args>
+                inline socket(size_t capacity, ioManager* mngr, Args&&... args) :
+                    asio::ip::tcp::socket(std::forward<Args>(args)...),
+                    _prom_recv(mngr, capacity),
+                    _prom_send(mngr) {}
+
+                template<typename ...Args>
+                inline coPromise<> send_io(Args&&... args)
                 {
-                    std::span<uint8_t>* recv = task_await(pv->in_handle);
-                    if (pv->in_handle.isResolve())
-                    {
-                        err ret = req.fromChar((const char*)recv->data(), recv->size());
-                        if (ret == io::err::ok)
+                    coPromise<> prom = _prom_send;
+                    this->async_send(asio::buffer(std::forward(args)...), [prom](const asio::error_code& ec) mutable {
+                        if (prom.tryOccupy() == io::err::ok)
                         {
-                            for (auto& out : pv->out_slot)
+                            if (!ec)
                             {
-                                *out.data() = req;
-                                req.clear();
-                                out.resolveLocal();
+                                prom.resolve();
+                            }
+                            else
+                            {
+                                prom.reject();
                             }
                         }
-                        else if (ret != io::err::less)
-                        {
-                            for (auto& out : pv->out_slot)
-                            {
-                                out.rejectLocal();
-                            }
-                            req.clear();
-                        }
-                    }
-                    if (pv->destroy)
-                        co_return;
-                    pv->in_handle.reset();
+                        });
+                    return _prom_send;
                 }
-                co_return;
-            }
-            ioChannel<responce, std::span<uint8_t>> responce_praser(ioManager* m)
-            {
-                using promise_value = ioChannel<responce, std::span<uint8_t>>::promise_value;
-                promise_value* pv;
-                co_yield &pv;
-                responce rsp;
-                while (1)
+
+                inline coPromise<buffer> recv_io()
                 {
-                    std::span<uint8_t>* recv = task_await(pv->in_handle);
-                    if (pv->in_handle.isResolve())
-                    {
-                        err ret = rsp.fromChar((const char*)recv->data(), recv->size());
-                        if (ret == io::err::ok)
+                    buffer* data = _prom_recv.data();
+                    coPromise<buffer> prom = _prom_recv;
+                    this->async_read_some(asio::buffer((void*)data->push_ptr(),data->remain()), [prom](const asio::error_code& ec, size_t n) mutable {
+                        if (prom.tryOccupy() == io::err::ok)
                         {
-                            for (auto& out : pv->out_slot)
+                            if (!ec)
                             {
-                                *out.data() = rsp;
-                                rsp.clear();
-                                out.resolveLocal();
+                                prom.data()->push_size(n);
+                                prom.resolve();
+                            }
+                            else
+                            {
+                                prom.reject();
                             }
                         }
-                        else if (ret != io::err::less)
+                        });
+                    return _prom_recv;
+                }
+            private:
+                coPromise<buffer> _prom_recv;
+                coPromise<> _prom_send;
+            };
+            // all accepted sockets are owned by the ioManager which the constructor gave.
+            struct acceptor : public asio::ip::tcp::acceptor {
+                
+                template<typename ...Args>
+                inline acceptor(size_t capacity, ioManager* mngr, Args&&... args) :
+                    asio::ip::tcp::acceptor(asioManager, std::forward<Args>(args)...),
+                    _prom(mngr),
+                    buf_cap(capacity) {}
+
+                inline coPromise<tcp::socket> accept_io() {
+                    _prom.reset();
+                    coPromise<tcp::socket> prom = _prom;
+                    size_t buf_cap = this->buf_cap;
+                    this->async_accept([prom, buf_cap](const asio::error_code& ec, asio::ip::tcp::socket sock) mutable {
+                        if (prom.tryOccupy() == io::err::ok)
                         {
-                            for (auto& out : pv->out_slot)
+                            if (!ec)
                             {
-                                out.rejectLocal();
+                                *prom.data() = socket(buf_cap, prom.getManager(), std::move(sock));
+                                prom.resolve();
                             }
-                            rsp.clear();
+                            else
+                            {
+                                prom.reject();
+                            }
                         }
-                    }
-                    if (pv->destroy)
-                        co_return;
-                    pv->in_handle.reset();
+                        });
+                    return _prom;
                 }
-                co_return;
-            }
-            ioChannel<std::string, request> request_sender(ioManager* m)
-            {
-                using promise_value = ioChannel<std::string, request>::promise_value;
-                promise_value* pv;
-                co_yield &pv;
-                while (1)
-                {
-                    request* recv = task_await(pv->in_handle);
-                    if (pv->in_handle.isResolve())
-                    {
-                        for (auto& out : pv->out_slot)
-                        {
-                            *out.data() = recv->toString();
-                            out.resolveLocal();
-                        }
-                    }
-                    if (pv->destroy)
-                        co_return;
-                    pv->in_handle.reset();
-                }
-                co_return;
-            }
-            ioChannel<std::string, responce> responce_sender(ioManager * m)
-            {
-                using promise_value = ioChannel<std::string, responce>::promise_value;
-                promise_value* pv;
-                co_yield &pv;
-                while (1)
-                {
-                    responce* recv = task_await(pv->in_handle);
-                    if (pv->in_handle.isResolve())
-                    {
-                        for (auto& out : pv->out_slot)
-                        {
-                            *out.data() = recv->toString();
-                            out.resolveLocal();
-                        }
-                    }
-                    if (pv->destroy)
-                        co_return;
-                    pv->in_handle.reset();
-                }
-                co_return;
-            }
+            private:
+                coPromise<tcp::socket> _prom;
+                bool waited;
+                size_t buf_cap;
+            };
         };
 
-        class adc{};
+        namespace udp {
+            struct socket : public asio::ip::udp::socket {
+                template<typename ...Args>
+                inline socket(size_t capacity, ioManager* mngr, Args&&... args) :
+                    asio::ip::udp::socket(std::forward<Args>(args)...),
+                    _prom_recv(mngr, capacity),
+                    _prom_send(mngr) { }
 
-        class dac{};
+                template<typename ...Args>
+                inline coPromise<> send_io(asio::ip::udp::endpoint addr, Args&&... args)
+                {
+                    coPromise<> prom = _prom_send;
+                    this->async_send_to(asio::buffer(std::forward(args)...), addr, [prom](const asio::error_code& ec) mutable {
+                        if (prom.tryOccupy() == io::err::ok)
+                        {
+                            if (!ec)
+                            {
+                                prom.resolve();
+                            }
+                            else
+                            {
+                                prom.reject();
+                            }
+                        }
+                        });
+                    return _prom_send;
+                }
+                inline coPromise<std::tuple<buffer, asio::ip::udp::endpoint>> recv_io()
+                {
+                    buffer* data = &std::get<0>(*_prom_recv.data());
+                    asio::ip::udp::endpoint* addr = &std::get<1>(*_prom_recv.data());
+                    coPromise<std::tuple<buffer, asio::ip::udp::endpoint>> prom = _prom_recv;
+                    this->async_receive_from(asio::buffer((void*)data->push_ptr(), data->remain()), *addr, 
+                        [prom](const asio::error_code& ec, size_t n) mutable {
+                        if (prom.tryOccupy() == io::err::ok)
+                        {
+                            if (!ec)
+                            {
+                                std::get<0>(*prom.data()).push_size(n);
+                                prom.resolve();
+                            }
+                            else
+                            {
+                                prom.reject();
+                            }
+                        }
+                        });
+                    return _prom_recv;
+                }
+            private:
+                coPromise<std::tuple<buffer, asio::ip::udp::endpoint>> _prom_recv;
+                coPromise<> _prom_send;
+            };
+        };
 
-        class uart{};
+        namespace http {
+#include "protocol/http.h"
+        };
 
-        class i2c{};
+        // software simulated protocol, the same as below
+        namespace uart{};
 
-        class spi{};
+        namespace i2c{};
 
-        class can{};
+        namespace spi{};
 
-        class camera{};
+        namespace can{};
 
-        class usb{};
+        namespace usb{};
 
 #include "internal/definitions.h"
         }

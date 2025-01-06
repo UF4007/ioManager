@@ -37,3 +37,16 @@ class lowlevel {
         ~awaiter();
     };
 };
+
+inline static asio::io_context asioManager = asio::io_context(1);
+inline static auto asioManagerStart = [] {
+    std::thread([] {
+        asio::steady_timer jammer(asioManager, std::chrono::hours(1));
+        jammer.async_wait([](const asio::error_code& ec) {});
+        while (1)
+        {
+            asioManager.run();
+        }
+        }).detach();
+    return true;
+    }();
