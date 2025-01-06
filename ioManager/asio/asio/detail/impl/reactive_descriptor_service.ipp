@@ -15,17 +15,17 @@
 # pragma once
 #endif // defined(_MSC_VER) && (_MSC_VER >= 1200)
 
-#include "asio/detail/config.hpp"
+#include "../config.hpp"
 
 #if !defined(ASIO_WINDOWS) \
   && !defined(ASIO_WINDOWS_RUNTIME) \
   && !defined(__CYGWIN__) \
   && !defined(ASIO_HAS_IO_URING_AS_DEFAULT)
 
-#include "asio/error.hpp"
-#include "asio/detail/reactive_descriptor_service.hpp"
+#include "../../error.hpp"
+#include "../reactive_descriptor_service.hpp"
 
-#include "asio/detail/push_options.hpp"
+#include "../push_options.hpp"
 
 namespace asio {
 namespace detail {
@@ -220,7 +220,7 @@ void reactive_descriptor_service::do_start_op(implementation_type& impl,
 } // namespace detail
 } // namespace asio
 
-#include "asio/detail/pop_options.hpp"
+#include "../pop_options.hpp"
 
 #endif // !defined(ASIO_WINDOWS)
        //   && !defined(ASIO_WINDOWS_RUNTIME)

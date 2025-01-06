@@ -15,15 +15,15 @@
 # pragma once
 #endif // defined(_MSC_VER) && (_MSC_VER >= 1200)
 
-#include "asio/detail/config.hpp"
+#include "../config.hpp"
 
 #if defined(ASIO_WINDOWS)
 
-#include "asio/detail/throw_error.hpp"
-#include "asio/detail/win_mutex.hpp"
-#include "asio/error.hpp"
+#include "../throw_error.hpp"
+#include "../win_mutex.hpp"
+#include "../../error.hpp"
 
-#include "asio/detail/push_options.hpp"
+#include "../push_options.hpp"
 
 namespace asio {
 namespace detail {
@@ -77,7 +77,7 @@ int win_mutex::do_init()
 } // namespace detail
 } // namespace asio
 
-#include "asio/detail/pop_options.hpp"
+#include "../pop_options.hpp"
 
 #endif // defined(ASIO_WINDOWS)
 

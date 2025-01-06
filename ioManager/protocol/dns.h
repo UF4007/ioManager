@@ -352,19 +352,19 @@ namespace dns_internal {
     }
 }
 
-struct dns_data {
-    io::dns_internal::dns_t content;
+struct data {
+    io::dns::dns_internal::dns_t content;
     bool allocated = false;
-    dns_data() = default;
-    dns_data(const dns_data&) = delete;
-    void operator =(const dns_data&) = delete;
-    inline ~dns_data() {
+    data() = default;
+    data(const data&) = delete;
+    void operator =(const data&) = delete;
+    inline ~data() {
         clear();
     }
     inline void clear() {
         if (allocated)
         {
-            io::dns_internal::dns_free(&content);
+            io::dns::dns_internal::dns_free(&content);
             allocated = false;
         }
     }
@@ -380,7 +380,7 @@ struct dns_data {
     {
         if (allocated)
         {
-            io::dns_internal::dns_rr_t* rr = content.answers;
+            io::dns::dns_internal::dns_rr_t* rr = content.answers;
             for (int i = 0; i < content.hdr.nanswer; i++)
             {
                 if (rr->rtype == 1) { // A record
@@ -393,25 +393,25 @@ struct dns_data {
         }
         return io::err::failed;
     }
-    inline static io::dns_internal::dnshdr_t header;
-    inline static std::string toString(const std::string& domain) {
-        std::ostringstream stream;
-
-        stream.write(reinterpret_cast<const char*>(&header), sizeof(io::dns_internal::dnshdr_t));
-
-        size_t pos = 0;
-
-        char buf[DNS_NAME_MAXLEN];
-        size_t siz = io::dns_internal::dns_name_encode(domain.c_str(), buf);
-
-        stream.write(buf, siz);
-
-        uint16_t qType = htons(1);  // A record
-        uint16_t qClass = htons(1); // IN (Internet)
-
-        stream.write(reinterpret_cast<const char*>(&qType), sizeof(qType));
-        stream.write(reinterpret_cast<const char*>(&qClass), sizeof(qClass));
-
-        return stream.str();
-    }
 };
+inline io::dns::dns_internal::dnshdr_t header;
+inline std::string query(const std::string& domain) {
+    std::ostringstream stream;
+
+    stream.write(reinterpret_cast<const char*>(&header), sizeof(io::dns::dns_internal::dnshdr_t));
+
+    size_t pos = 0;
+
+    char buf[DNS_NAME_MAXLEN];
+    size_t siz = io::dns::dns_internal::dns_name_encode(domain.c_str(), buf);
+
+    stream.write(buf, siz);
+
+    uint16_t qType = htons(1);  // A record
+    uint16_t qClass = htons(1); // IN (Internet)
+
+    stream.write(reinterpret_cast<const char*>(&qType), sizeof(qType));
+    stream.write(reinterpret_cast<const char*>(&qClass), sizeof(qClass));
+
+    return stream.str();
+}

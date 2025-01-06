@@ -15,15 +15,15 @@
 # pragma once
 #endif // defined(_MSC_VER) && (_MSC_VER >= 1200)
 
-#include "asio/detail/config.hpp"
+#include "../config.hpp"
 
 #if defined(ASIO_HAS_PTHREADS)
 
-#include "asio/detail/posix_mutex.hpp"
-#include "asio/detail/throw_error.hpp"
-#include "asio/error.hpp"
+#include "../posix_mutex.hpp"
+#include "../throw_error.hpp"
+#include "../../error.hpp"
 
-#include "asio/detail/push_options.hpp"
+#include "../push_options.hpp"
 
 namespace asio {
 namespace detail {
@@ -39,7 +39,7 @@ posix_mutex::posix_mutex()
 } // namespace detail
 } // namespace asio
 
-#include "asio/detail/pop_options.hpp"
+#include "../pop_options.hpp"
 
 #endif // defined(ASIO_HAS_PTHREADS)
 

@@ -15,16 +15,16 @@
 # pragma once
 #endif // defined(_MSC_VER) && (_MSC_VER >= 1200)
 
-#include "asio/detail/config.hpp"
+#include "../config.hpp"
 
 #if defined(ASIO_WINDOWS_RUNTIME)
 
 #include <cstring>
-#include "asio/detail/winrt_ssocket_service_base.hpp"
-#include "asio/detail/winrt_async_op.hpp"
-#include "asio/detail/winrt_utils.hpp"
+#include "../winrt_ssocket_service_base.hpp"
+#include "../winrt_async_op.hpp"
+#include "../winrt_utils.hpp"
 
-#include "asio/detail/push_options.hpp"
+#include "../push_options.hpp"
 
 namespace asio {
 namespace detail {
@@ -619,7 +619,7 @@ void winrt_ssocket_service_base::start_receive_op(
 } // namespace detail
 } // namespace asio
 
-#include "asio/detail/pop_options.hpp"
+#include "../pop_options.hpp"
 
 #endif // defined(ASIO_WINDOWS_RUNTIME)
 

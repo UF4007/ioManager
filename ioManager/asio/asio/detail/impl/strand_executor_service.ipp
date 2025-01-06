@@ -15,10 +15,10 @@
 # pragma once
 #endif // defined(_MSC_VER) && (_MSC_VER >= 1200)
 
-#include "asio/detail/config.hpp"
-#include "asio/detail/strand_executor_service.hpp"
+#include "../config.hpp"
+#include "../strand_executor_service.hpp"
 
-#include "asio/detail/push_options.hpp"
+#include "../push_options.hpp"
 
 namespace asio {
 namespace detail {
@@ -153,6 +153,6 @@ void strand_executor_service::run_ready_handlers(implementation_type& impl)
 } // namespace detail
 } // namespace asio
 
-#include "asio/detail/pop_options.hpp"
+#include "../pop_options.hpp"
 
 #endif // ASIO_DETAIL_IMPL_STRAND_EXECUTOR_SERVICE_IPP

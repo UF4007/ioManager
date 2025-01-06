@@ -15,15 +15,15 @@
 # pragma once
 #endif // defined(_MSC_VER) && (_MSC_VER >= 1200)
 
-#include "asio/detail/config.hpp"
+#include "../../../detail/config.hpp"
 
-#include "asio/detail/throw_error.hpp"
-#include "asio/error.hpp"
-#include "asio/ssl/detail/engine.hpp"
-#include "asio/ssl/error.hpp"
-#include "asio/ssl/verify_context.hpp"
+#include "../../../detail/throw_error.hpp"
+#include "../../../error.hpp"
+#include "../engine.hpp"
+#include "../../error.hpp"
+#include "../../verify_context.hpp"
 
-#include "asio/detail/push_options.hpp"
+#include "../../../detail/push_options.hpp"
 
 namespace asio {
 namespace ssl {
@@ -372,6 +372,6 @@ int engine::do_write(void* data, std::size_t length)
 } // namespace ssl
 } // namespace asio
 
-#include "asio/detail/pop_options.hpp"
+#include "../../../detail/pop_options.hpp"
 
 #endif // ASIO_SSL_DETAIL_IMPL_ENGINE_IPP

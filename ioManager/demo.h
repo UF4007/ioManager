@@ -1,6 +1,4 @@
 #include<stdio.h>
-//#include<mariadb/mysql.h>
-#define IO_USE_SELECT 1
 #include "ioManager.h"
 
 asio::awaitable<void> asioCoroTest()
@@ -123,8 +121,51 @@ io::coTask test_multi(io::ioManager* para)
     }
 }
 
+io::coTask tcp_echo_connect(io::ioManager* mngr, io::tcp::socket socket)
+{
+    while (1)
+    {
+        io::coPromise<io::buffer> recv_promise = socket.recv_io();
+        io::buffer* data = co_await *recv_promise;
+        if (recv_promise.isResolve())
+        {
+            co_await *socket.send_io(data->data(), data->size());
+            data->clear();
+        }
+        else
+            break;
+    }
+    co_return;
+}
+
+io::coTask tcp_echo_server(io::ioManager* mngr)
+{
+    io::tcp::acceptor server(1000, mngr, asio::ip::tcp::endpoint{ asio::ip::tcp::v4(), 12345 });
+    while (1)
+    {
+        io::coPromise<io::tcp::socket> promise = server.accept_io();
+        io::tcp::socket* data = co_await *promise;
+        tcp_echo_connect(mngr, std::move(*data));
+    }
+    co_return;
+}
+
+io::coTask udp_echo(io::ioManager* mngr)
+{
+    io::udp::socket server(1000, mngr, asio::ip::udp::endpoint{ asio::ip::udp::v4(), 12345 });
+    while (1)
+    {
+        io::coPromise<std::tuple<io::buffer, asio::ip::udp::endpoint>> promise = server.recv_io();
+        auto& [buffer, addr] = *co_await *promise;
+        co_await *server.send_io(addr, buffer.data(), buffer.size());
+        buffer.clear();
+    }
+    co_return;
+}
+
 void io_testmain()
 {
+
     io::ioManager context;
 
     //asio coroutine benchmark
@@ -142,7 +183,7 @@ void io_testmain()
     }
 
     //coroutine library benchmark
-    if (true)
+    if (false)
     {
         io::ioManager::auto_go(1);  //single thread
         for (int i = 0; i < 1000000; i++)   //less than 1 us per task recircle when in 1M coroutines, memory usage:460MB
@@ -153,11 +194,23 @@ void io_testmain()
     }
 
     //coSelector test
-    if (true)
+    if (false)
     {
         io::ioManager::auto_go(1);
         io::ioManager::auto_once(test_multi);
         std::this_thread::sleep_for(std::chrono::years(30));
+    }
+
+    //tcp echo
+    if (false)
+    {
+        tcp_echo_server(&context);
+    }
+
+    //udp echo
+    if (true)
+    {
+        udp_echo(&context);
     }
 
     //coroutine test
@@ -165,5 +218,8 @@ void io_testmain()
     {
         //io::ioManager::auto_once(test_udp_client);
     }
-    std::this_thread::sleep_for(std::chrono::years(30));
+    while (1)
+    {
+        context.drive();
+    }
 }

@@ -15,7 +15,7 @@
 # pragma once
 #endif // defined(_MSC_VER) && (_MSC_VER >= 1200)
 
-#include "asio/detail/config.hpp"
+#include "../config.hpp"
 
 #if defined(ASIO_CUSTOM_HANDLER_TRACKING)
 
@@ -25,23 +25,23 @@
 
 #include <cstdarg>
 #include <cstdio>
-#include "asio/detail/handler_tracking.hpp"
+#include "../handler_tracking.hpp"
 
 #if defined(ASIO_HAS_BOOST_DATE_TIME)
-# include "asio/time_traits.hpp"
+#include "../../time_traits.hpp"
 #else // defined(ASIO_HAS_BOOST_DATE_TIME)
-# include "asio/detail/chrono.hpp"
-# include "asio/detail/chrono_time_traits.hpp"
-# include "asio/wait_traits.hpp"
+#include "../chrono.hpp"
+#include "../chrono_time_traits.hpp"
+#include "../../wait_traits.hpp"
 #endif // defined(ASIO_HAS_BOOST_DATE_TIME)
 
 #if defined(ASIO_WINDOWS_RUNTIME)
-# include "asio/detail/socket_types.hpp"
+#include "../socket_types.hpp"
 #elif !defined(ASIO_WINDOWS)
 # include <unistd.h>
 #endif // !defined(ASIO_WINDOWS)
 
-#include "asio/detail/push_options.hpp"
+#include "../push_options.hpp"
 
 namespace asio {
 namespace detail {
@@ -391,7 +391,7 @@ void handler_tracking::write_line(const char* format, ...)
 } // namespace detail
 } // namespace asio
 
-#include "asio/detail/pop_options.hpp"
+#include "../pop_options.hpp"
 
 #endif // defined(ASIO_ENABLE_HANDLER_TRACKING)
 

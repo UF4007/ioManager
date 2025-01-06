@@ -43,7 +43,7 @@ def process_include(file_path, project_root):
 def process_project(project_root):
     for root, _, files in os.walk(project_root):
         for file in files:
-            if file.endswith(('.h', '.hpp')):
+            if file.endswith(('.h', '.hpp', '.ipp')):
                 process_include(os.path.join(root, file), project_root)
 
 

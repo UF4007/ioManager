@@ -15,22 +15,22 @@
 # pragma once
 #endif // defined(_MSC_VER) && (_MSC_VER >= 1200)
 
-#include "asio/detail/config.hpp"
+#include "../config.hpp"
 
 #include <cstring>
 #include <stdexcept>
-#include "asio/detail/signal_blocker.hpp"
-#include "asio/detail/signal_set_service.hpp"
-#include "asio/detail/static_mutex.hpp"
-#include "asio/detail/throw_exception.hpp"
+#include "../signal_blocker.hpp"
+#include "../signal_set_service.hpp"
+#include "../static_mutex.hpp"
+#include "../throw_exception.hpp"
 
 #if defined(ASIO_HAS_IO_URING_AS_DEFAULT)
-# include "asio/detail/io_uring_service.hpp"
+#include "../io_uring_service.hpp"
 #else // defined(ASIO_HAS_IO_URING_AS_DEFAULT)
-# include "asio/detail/reactor.hpp"
+#include "../reactor.hpp"
 #endif // defined(ASIO_HAS_IO_URING_AS_DEFAULT)
 
-#include "asio/detail/push_options.hpp"
+#include "../push_options.hpp"
 
 namespace asio {
 namespace detail {
@@ -821,6 +821,6 @@ void signal_set_service::start_wait_op(
 } // namespace detail
 } // namespace asio
 
-#include "asio/detail/pop_options.hpp"
+#include "../pop_options.hpp"
 
 #endif // ASIO_DETAIL_IMPL_SIGNAL_SET_SERVICE_IPP

@@ -409,7 +409,7 @@ namespace io
             static void auto_go(uint32_t threadSum = 1);
             static void auto_stop();
             static void auto_once(coTask::processPtr ptr);
-        };
+        }; 
         inline std::deque<ioManager> ioManager::all = {};
 
 
@@ -418,17 +418,31 @@ namespace io
 
         namespace tcp {
             struct socket : public asio::ip::tcp::socket {
+                inline socket() :asio::ip::tcp::socket(asioManager) {}
+
                 template<typename ...Args>
+                    requires std::is_constructible_v<asio::ip::tcp::socket, Args...>
                 inline socket(size_t capacity, ioManager* mngr, Args&&... args) :
                     asio::ip::tcp::socket(std::forward<Args>(args)...),
                     _prom_recv(mngr, capacity),
                     _prom_send(mngr) {}
 
                 template<typename ...Args>
+                    requires std::is_constructible_v<asio::ip::tcp::socket, asio::io_context, Args...>
+                inline socket(size_t capacity, ioManager* mngr, Args&&... args) :
+                    asio::ip::tcp::socket(asioManager, std::forward<Args>(args)...),
+                    _prom_recv(mngr, capacity),
+                    _prom_send(mngr) {
+                }
+
+                template<typename ...Args>
+                    requires requires (Args&&... args) { asio::buffer(std::forward<Args>(args)...); }
                 inline coPromise<> send_io(Args&&... args)
                 {
+                    _prom_send.reset();
                     coPromise<> prom = _prom_send;
-                    this->async_send(asio::buffer(std::forward(args)...), [prom](const asio::error_code& ec) mutable {
+                    this->async_send(asio::buffer(std::forward<Args>(args)...),
+                        [prom](const asio::error_code& ec, size_t length) mutable {
                         if (prom.tryOccupy() == io::err::ok)
                         {
                             if (!ec)
@@ -440,12 +454,14 @@ namespace io
                                 prom.reject();
                             }
                         }
-                        });
+                        }
+                    );
                     return _prom_send;
                 }
 
                 inline coPromise<buffer> recv_io()
                 {
+                    _prom_recv.reset();
                     buffer* data = _prom_recv.data();
                     coPromise<buffer> prom = _prom_recv;
                     this->async_read_some(asio::buffer((void*)data->push_ptr(),data->remain()), [prom](const asio::error_code& ec, size_t n) mutable {
@@ -499,7 +515,6 @@ namespace io
                 }
             private:
                 coPromise<tcp::socket> _prom;
-                bool waited;
                 size_t buf_cap;
             };
         };
@@ -508,15 +523,16 @@ namespace io
             struct socket : public asio::ip::udp::socket {
                 template<typename ...Args>
                 inline socket(size_t capacity, ioManager* mngr, Args&&... args) :
-                    asio::ip::udp::socket(std::forward<Args>(args)...),
-                    _prom_recv(mngr, capacity),
+                    asio::ip::udp::socket(asioManager, std::forward<Args>(args)...),
+                    _prom_recv(mngr, std::make_tuple(buffer(capacity), asio::ip::udp::endpoint())),
                     _prom_send(mngr) { }
 
                 template<typename ...Args>
                 inline coPromise<> send_io(asio::ip::udp::endpoint addr, Args&&... args)
                 {
+                    _prom_send.reset();
                     coPromise<> prom = _prom_send;
-                    this->async_send_to(asio::buffer(std::forward(args)...), addr, [prom](const asio::error_code& ec) mutable {
+                    this->async_send_to(asio::buffer(std::forward<Args>(args)...), addr, [prom](const asio::error_code& ec, size_t length) mutable {
                         if (prom.tryOccupy() == io::err::ok)
                         {
                             if (!ec)
@@ -533,6 +549,7 @@ namespace io
                 }
                 inline coPromise<std::tuple<buffer, asio::ip::udp::endpoint>> recv_io()
                 {
+                    _prom_recv.reset();
                     buffer* data = &std::get<0>(*_prom_recv.data());
                     asio::ip::udp::endpoint* addr = &std::get<1>(*_prom_recv.data());
                     coPromise<std::tuple<buffer, asio::ip::udp::endpoint>> prom = _prom_recv;
@@ -550,13 +567,18 @@ namespace io
                                 prom.reject();
                             }
                         }
-                        });
+                        }
+                    );
                     return _prom_recv;
                 }
             private:
                 coPromise<std::tuple<buffer, asio::ip::udp::endpoint>> _prom_recv;
                 coPromise<> _prom_send;
             };
+        };
+
+        namespace dns {
+#include "protocol/dns.h"
         };
 
         namespace http {

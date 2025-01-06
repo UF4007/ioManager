@@ -16,14 +16,14 @@
 # pragma once
 #endif // defined(_MSC_VER) && (_MSC_VER >= 1200)
 
-#include "asio/detail/config.hpp"
+#include "../detail/config.hpp"
 
 #if defined(ASIO_HAS_SERIAL_PORT)
 
 #include <stdexcept>
-#include "asio/error.hpp"
-#include "asio/serial_port_base.hpp"
-#include "asio/detail/throw_exception.hpp"
+#include "../error.hpp"
+#include "../serial_port_base.hpp"
+#include "../detail/throw_exception.hpp"
 
 #if defined(GENERATING_DOCUMENTATION)
 # define ASIO_OPTION_STORAGE implementation_defined
@@ -33,7 +33,7 @@
 # define ASIO_OPTION_STORAGE termios
 #endif
 
-#include "asio/detail/push_options.hpp"
+#include "../detail/push_options.hpp"
 
 namespace asio {
 
@@ -545,7 +545,7 @@ ASIO_SYNC_OP_VOID serial_port_base::character_size::load(
 
 } // namespace asio
 
-#include "asio/detail/pop_options.hpp"
+#include "../detail/pop_options.hpp"
 
 #undef ASIO_OPTION_STORAGE
 
