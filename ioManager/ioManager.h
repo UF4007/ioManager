@@ -32,6 +32,22 @@ namespace io
             formaterr = 7,      //format error
         };
 
+        //For temporary use. Not for library use.
+        template <typename T>
+        struct ban_copy : public T {
+            ban_copy(const ban_copy&) = delete;
+            ban_copy& operator =(const ban_copy&) = delete;
+        };
+
+        //For temporary use. Not for library use.
+        template <typename T>
+        struct ban_copy_and_move :public T {
+            ban_copy_and_move(const ban_copy_and_move&) = delete;
+            ban_copy_and_move& operator =(const ban_copy_and_move&) = delete;
+            ban_copy_and_move(ban_copy_and_move&&) = delete;
+            ban_copy_and_move& operator =(ban_copy_and_move&&) = delete;
+        };
+
         struct buffer {
             inline buffer(size_t capacity) { this->capacity = capacity; _data.resize(capacity); }
             inline size_t size() { return depleted; }
@@ -422,16 +438,16 @@ namespace io
 
                 template<typename ...Args>
                     requires std::is_constructible_v<asio::ip::tcp::socket, Args...>
-                inline socket(size_t capacity, ioManager* mngr, Args&&... args) :
+                inline socket(size_t buffer_capacity, ioManager* mngr, Args&&... args) :
                     asio::ip::tcp::socket(std::forward<Args>(args)...),
-                    _prom_recv(mngr, capacity),
+                    _prom_recv(mngr, buffer_capacity),
                     _prom_send(mngr) {}
 
                 template<typename ...Args>
                     requires std::is_constructible_v<asio::ip::tcp::socket, asio::io_context, Args...>
-                inline socket(size_t capacity, ioManager* mngr, Args&&... args) :
+                inline socket(size_t buffer_capacity, ioManager* mngr, Args&&... args) :
                     asio::ip::tcp::socket(asioManager, std::forward<Args>(args)...),
-                    _prom_recv(mngr, capacity),
+                    _prom_recv(mngr, buffer_capacity),
                     _prom_send(mngr) {
                 }
 
@@ -488,10 +504,10 @@ namespace io
             struct acceptor : public asio::ip::tcp::acceptor {
                 
                 template<typename ...Args>
-                inline acceptor(size_t capacity, ioManager* mngr, Args&&... args) :
+                inline acceptor(size_t buffer_capacity, ioManager* mngr, Args&&... args) :
                     asio::ip::tcp::acceptor(asioManager, std::forward<Args>(args)...),
                     _prom(mngr),
-                    buf_cap(capacity) {}
+                    buf_cap(buffer_capacity) {}
 
                 inline coPromise<tcp::socket> accept_io() {
                     _prom.reset();
@@ -522,9 +538,9 @@ namespace io
         namespace udp {
             struct socket : public asio::ip::udp::socket {
                 template<typename ...Args>
-                inline socket(size_t capacity, ioManager* mngr, Args&&... args) :
+                inline socket(size_t buffer_capacity, ioManager* mngr, Args&&... args) :
                     asio::ip::udp::socket(asioManager, std::forward<Args>(args)...),
-                    _prom_recv(mngr, std::make_tuple(buffer(capacity), asio::ip::udp::endpoint())),
+                    _prom_recv(mngr, std::make_tuple(buffer(buffer_capacity), asio::ip::udp::endpoint())),
                     _prom_send(mngr) { }
 
                 template<typename ...Args>
