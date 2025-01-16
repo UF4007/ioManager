@@ -441,6 +441,9 @@ namespace io
                 handle.resume();
                 return ret;
             }
+            inline size_t size() const {
+                return pool.size();
+            }
             inline coPromise<coPromise_Type> find(const Index& t)const {
                 auto iter = std::find(pool.begin(), pool.end(), t);
                 if (iter == pool.end())
