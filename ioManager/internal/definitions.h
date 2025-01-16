@@ -503,6 +503,13 @@ inline io::err io::coSelector::remove(coPromise<T>& right)
 
 
 
+//coDispatcher
+template <typename coPromise_Type>
+template<typename ...Args>
+inline io::coDispatchedTask<coPromise_Type>::promise_type::promise_type(ioManager* m, Args&&... args) : prom(m) {}
+
+
+
 //ioManager
 inline io::ioManager::ioManager() {
 	//timeAwaiterCentral.prev = (lowlevel::awaiter*)this;	// no, this is ub

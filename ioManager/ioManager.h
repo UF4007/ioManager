@@ -32,16 +32,26 @@ namespace io
             formaterr = 7,      //format error
         };
 
-        //For temporary use. Not for library use.
         template <typename T>
         struct ban_copy : public T {
+            template<typename ...Args>
+            ban_copy(Args&&...args) :T(std::forward<Args>(args)...) {}
             ban_copy(const ban_copy&) = delete;
             ban_copy& operator =(const ban_copy&) = delete;
         };
 
-        //For temporary use. Not for library use.
+        template <typename T>
+        struct ban_move : public T {
+            template<typename ...Args>
+            ban_move(Args&&...args) :T(std::forward<Args>(args)...) {}
+            ban_move(ban_move&&) = delete;
+            ban_move& operator =(ban_move&&) = delete;
+        };
+
         template <typename T>
         struct ban_copy_and_move :public T {
+            template<typename ...Args>
+            ban_copy_and_move(Args&&...args) :T(std::forward<Args>(args)...) {}
             ban_copy_and_move(const ban_copy_and_move&) = delete;
             ban_copy_and_move& operator =(const ban_copy_and_move&) = delete;
             ban_copy_and_move(ban_copy_and_move&&) = delete;
@@ -318,6 +328,7 @@ namespace io
 
         // multiplex awaiter, an awaiter group. When ANY awaiter in coSelector is set, the coSelector will be resumed.
         //  not thread safe. All the coPromise in it must be in the same ioManager.
+        //  if it holds a massive set of coPromise (more than 1000 coPromise), the efficiency will decrease seriously.
         class coSelector{
             struct subTask {
                 struct promise_type {
@@ -378,6 +389,96 @@ namespace io
             void add(coPromise<First>& first, coPromise<Remain>&... remain);
             template <typename T>
             err remove(coPromise<T>& right);
+        };
+
+        template<typename coPromise_Type = void>
+        struct coDispatchedTask {
+            struct promise_type {
+                coPromise<coPromise_Type> prom;
+                std::function<void(coDispatchedTask<coPromise_Type>::promise_type*)> on_decons_erase_this;
+
+                template<typename ...Args>
+                promise_type(ioManager* m, Args&&... args);
+                inline coDispatchedTask<coPromise_Type> get_return_object() { return coDispatchedTask<coPromise_Type>(this); }
+
+                inline std::suspend_always initial_suspend() { return {}; }
+                inline std::suspend_never final_suspend() noexcept { return {}; }
+
+                inline std::suspend_never yield_value(coPromise<coPromise_Type>& returnvl) { returnvl = prom; return {}; }      //for visit the promise_type obj of this coroutine.
+
+                inline void return_void() {
+                    if (on_decons_erase_this)
+                    {
+                        on_decons_erase_this(this);
+                    }
+                }
+                inline void unhandled_exception() { std::terminate(); }
+            };
+
+            promise_type* content;
+            inline coDispatchedTask<coPromise_Type>(promise_type* c) :content(c) {}
+        };
+
+        // multiplex dispatcher. If any coroutine quits, the coPromise in dispatcher will be erased automated.
+        // if the dispatcher deconstructs, all coPromise(coroutine) in the dispatcher will be sent a reject signal, then the lifetime control of those coroutines transfers to the programmer.
+        // if it holds a massive set of coPromise(more than 1000 coPromise), the efficiency will decrease seriously.
+        template<typename Index, typename coPromise_Type>
+        struct coDispatcher {
+            template<typename DispatchType, typename ...Args>
+            requires requires (DispatchType&& dispatch, Args&&... args) {
+                { dispatch(std::forward<Args>(args)...) } -> std::same_as<coDispatchedTask<coPromise_Type>>;
+                }
+            inline coPromise<coPromise_Type> invoke(Index& index, DispatchType&& dispatch, Args&&... args) {
+                pool.emplace_back(index, std::invoke(dispatch, std::forward<Args>(args)...));
+                _pair* newOne = &*(pool.end() - 1);
+                newOne->coro.content->on_decons_erase_this = [this](coDispatchedTask<coPromise_Type>::promise_type* content) {
+                    auto iter = std::find(this->pool.begin(), this->pool.end(), content);
+                    this->pool.erase(iter);
+                    };
+                auto ret = newOne->coro.content->prom;
+                std::coroutine_handle<coDispatchedTask<coPromise_Type>::promise_type> handle = std::coroutine_handle<coDispatchedTask<coPromise_Type>::promise_type>::from_promise(*newOne->coro.content);
+                handle.resume();
+                return ret;
+            }
+            inline coPromise<coPromise_Type> find(const Index& t)const {
+                auto iter = std::find(pool.begin(), pool.end(), t);
+                if (iter == pool.end())
+                    return nullptr;
+                else
+                    return iter->coro.content->prom;
+            }
+
+            inline coDispatcher() {}
+            template <typename ...Args>
+            inline coDispatcher(Args&&...args) :pool(std::forward<Args>(args)...) {}
+            inline ~coDispatcher() {
+                for (auto& i : pool)
+                {
+                    auto prom = i.coro.content->prom;
+                    i.coro.content->on_decons_erase_this = nullptr;
+                    if (prom.tryOccupy() == io::err::ok)
+                    {
+                        prom.rejectLocal();
+                    }
+                }
+            }
+        private:
+            struct _pair {
+                Index index;
+                coDispatchedTask<coPromise_Type> coro;
+                inline bool operator==(const Index& index)const {
+                    return this->index == index;
+                }
+                inline bool operator==(const coDispatchedTask<coPromise_Type>& content)const {
+                    return this->coro.content == content.content;
+                }
+                inline _pair(Index& _index, coDispatchedTask<coPromise_Type> _coro) :index(_index), coro(_coro){}
+            };
+            std::vector<_pair> pool;                        //Vector has the fastest speed when size < 1000 which adapts most usage.
+            coDispatcher(const coDispatcher&) = delete;
+            void operator=(const coDispatcher&) = delete;
+            coDispatcher(coDispatcher&&) = delete;            //all of those promise_type s record this coSelector pointer.
+            void operator=(coDispatcher&&) = delete;
         };
 
         // manager of coroutine tasks
@@ -540,7 +641,7 @@ namespace io
                 template<typename ...Args>
                 inline socket(size_t buffer_capacity, ioManager* mngr, Args&&... args) :
                     asio::ip::udp::socket(asioManager, std::forward<Args>(args)...),
-                    _prom_recv(mngr, std::make_tuple(buffer(buffer_capacity), asio::ip::udp::endpoint())),
+                    _prom_recv(mngr, std::make_tuple(buffer_capacity, asio::ip::udp::endpoint())),
                     _prom_send(mngr) { }
 
                 template<typename ...Args>

@@ -121,6 +121,56 @@ io::coTask test_multi(io::ioManager* para)
     }
 }
 
+io::coDispatchedTask<std::string> test_disptask(io::ioManager* mngr)
+{
+    io::coPromise<std::string> prom;
+    co_yield prom;
+    prom.setTimeout(std::chrono::microseconds(100000));
+    auto& str = *prom.data();
+    str = "deconstruction!";
+    co_await *prom;
+    if (prom.isTimeout())
+    {
+        std::cout << "timeout!" << std::endl;
+    }
+    else
+    {
+        std::cout << str << std::endl;
+    }
+}
+
+io::coTask test_disp(io::ioManager* para)
+{
+    io::coPromise<> delayer(para);
+    while (1)
+    {
+        io::coDispatcher<int, std::string> taskTable;   // such as nat table
+        while (1)
+        {
+            int i = rand() % 1000 + 100;
+            if (i % 1000 != 0)
+            {
+                auto prom = taskTable.find(i);
+                if (prom == nullptr)
+                {
+                    taskTable.invoke(i, test_disptask, para);
+                }
+                else
+                {
+                    *prom.data() = "collision!";
+                    prom.rejectLocal();
+                }
+                co_await delayer.delay(std::chrono::microseconds(1));
+                delayer.reset();
+            }
+            else // 1/1000 case to deconstruct dispatcher
+            {
+                break;
+            }
+        }
+    }
+}
+
 io::coTask tcp_echo_connect(io::ioManager* mngr, io::tcp::socket socket)
 {
     while (1)
@@ -165,7 +215,6 @@ io::coTask udp_echo(io::ioManager* mngr)
 
 void io_testmain()
 {
-
     io::ioManager context;
 
     //asio coroutine benchmark
@@ -201,6 +250,14 @@ void io_testmain()
         std::this_thread::sleep_for(std::chrono::years(30));
     }
 
+    //coDispatcher test
+    if (true)
+    {
+        io::ioManager::auto_go(1);
+        io::ioManager::auto_once(test_disp);
+        std::this_thread::sleep_for(std::chrono::years(30));
+    }
+
     //tcp echo
     if (false)
     {
@@ -208,7 +265,7 @@ void io_testmain()
     }
 
     //udp echo
-    if (true)
+    if (false)
     {
         udp_echo(&context);
     }
