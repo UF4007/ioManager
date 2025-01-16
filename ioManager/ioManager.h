@@ -436,7 +436,8 @@ namespace io
                     this->pool.erase(iter);
                     };
                 auto ret = newOne->coro.content->prom;
-                std::coroutine_handle<coDispatchedTask<coPromise_Type>::promise_type> handle = std::coroutine_handle<coDispatchedTask<coPromise_Type>::promise_type>::from_promise(*newOne->coro.content);
+                using promise_type = coDispatchedTask<coPromise_Type>::promise_type;
+                auto handle = std::coroutine_handle<promise_type>::from_promise(*newOne->coro.content);
                 handle.resume();
                 return ret;
             }
