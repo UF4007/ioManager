@@ -20,7 +20,10 @@
 </div>
 
 # ioManager
-a C++20 coroutine scheduler with HAL support.
+
+### Close to the speed of native C++ coroutines, more than 10M coroutines per second switch speed supported.
+
+### A clear data protocol stream processing solution is provided.
 
 ---EXPERIMENTAL LIBRARY---
  
