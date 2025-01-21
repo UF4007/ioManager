@@ -3,10 +3,12 @@
  * 
  * for unifying various interfaces and their multiplexing provided by controllers, systems even computers.
  * 
- * ---EXPERIMENTAL LIBRARY---
+ * using asio for network support.
+ * 
+ * C++ standard: 20 or higher
  * 
  * Licensed under the MIT License.
- * Looking forward to visiting https://github.com/UF4007/ to propose issues, pull your device driver, and make ioManager stronger and more universal.
+ * Looking forward to visiting https://github.com/UF4007/ to propose issues, pull your protocol driver, and make ioManager stronger and more universal.
 */
 #pragma once
 #include "internal/config.h"
