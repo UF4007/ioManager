@@ -21,7 +21,7 @@
 
 # ioManager
 
-### Close to the speed of native C++ coroutines, more than 100M coroutines per second switch speed supported in single thread.
+### Close to the speed of native C++ coroutines, more than 100M coroutines per second switch speed is supported in a single thread.
 
 ### A clear data protocol stream processing solution is provided.
 
