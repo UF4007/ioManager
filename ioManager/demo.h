@@ -1,282 +1,423 @@
-#include<stdio.h>
+#include <stdio.h>
 #include "ioManager.h"
 
-asio::awaitable<void> asioCoroTest()
+io::fsm_func<io::awaitable> coro_demo(int initial)
 {
-    using namespace std::chrono_literals;
-    static int time = 1;
-    auto executor = co_await asio::this_coro::executor;
-    asio::steady_timer timer(executor, 1s);
-    while(1)
+    io::fsm<io::awaitable> &fsm = co_await io::get_fsm;
+    io::fsm_handle<io::awaitable> task_handle;
+    if (initial)
     {
-        //std::cout << "a" << std::endl;
-        co_await timer.async_wait(asio::use_awaitable);
-        timer.expires_after(std::chrono::seconds(1));
-        time++;
-        if (time > 5)
-            time = 1;
+        task_handle = fsm.getManager()->spawn_later(coro_demo(initial - 1));
+        co_await *task_handle.data();
+        std::cout << initial << std::endl;
     }
+    if (fsm->operator bool())
+        fsm->resume();
+}
+
+io::fsm_func<void> coro_limit_test(int num)
+{
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    for (int i = 0; i < num; i++)
+    {
+        fsm.spawn_now([]() -> io::fsm_func<void>
+                      {
+            io::fsm<void>& fsm = co_await io::get_fsm;
+            io::clock cl1, cl2;
+            io::future fut;
+            while (1)
+            {
+                fsm.make_clock(cl1, std::chrono::seconds(1));
+                fsm.make_clock(cl2, std::chrono::seconds(2));
+                io::promise prom = fsm.make_future(fut);
+                io_select(
+                    cl1, {
+                    }, 
+                    cl2, {
+                    },
+                    fut, {
+                    });
+            } }())
+            .detach();
+    }
+}
+
+io::fsm_func<void> coro_multi_thread()
+{
     co_return;
 }
 
-io::coAsync<> jointest(io::ioManager* para)
+io::fsm_func<void> coro_chan(size_t *count)
 {
-    using namespace std::chrono_literals;
-    static int time = 1;
-    io::coPromise<> prom(para);
-    prom.setTimeout(std::chrono::seconds(1));
-    time++;
-    if (time > 5)
-        time = 1;
-    co_await *prom;
-    co_return true;
-}
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    io::chan<char> chan = fsm.make_chan<char>(1000);
+    io::fsm_handle<void> handle;
 
-io::coTask benchmark_coroutine(io::ioManager* para)
-{
-    while (1)
+    // is zero-copy ?
+    if (true && count == nullptr)
     {
-        io::coPromise<> joint = jointest(para);
-        co_await *joint;
-        static int i = 0;
-        //std::cout << i++ << std::endl;    //watch cpu usage rate curve. it will be tidal.
-    }
-}
-
-io::coTask randomFunc(io::ioManager* para, io::coPromise<> prom)
-{
-    //prom.resolve(); //primary status of coMultiplex
-    static int num = 1;
-    int n = num++;
-    io::coPromise<> timer(para);
-    while (1)
-    {
-        int i = rand() % 5000 + 100;
-        timer.reset();
-        timer.setTimeout(std::chrono::microseconds(i));
-        co_await *timer;
-        //prom.resolve();
-        prom.resolveLocal();
-        std::cout << "rand send: " << n << ", await during: " << i << std::endl;
-    }
-}
-
-void randomFunc2(io::ioManager* para, io::coPromise<> prom)
-{
-    static int num = 1;
-    int n = num++;
-    while (1)
-    {
-        int i = rand() % 3000;
-        std::this_thread::sleep_for(std::chrono::nanoseconds(i));
-        if (prom.tryOccupy() == io::err::ok)
-        {
-            std::cout << "rand send: " << n << ", await during: " << i << std::endl;
-            prom.resolve();
-        }
-    }
-}
-
-io::coTask test_multi(io::ioManager* para)
-{
-    //single thread
-    //io::coPromise<> rand1(para);
-    //randomFunc(para, rand1);
-    //io::coPromise<> rand2(para);
-    //randomFunc(para, rand2);
-    //io::coPromise<> rand3(para);
-    //randomFunc(para, rand3);
-
-    //multi thread
-    io::coPromise<> rand1(para);
-    std::thread(randomFunc2, para, rand1).detach();
-    io::coPromise<> rand2(para);
-    std::thread(randomFunc2, para, rand2).detach();
-    io::coPromise<> rand3(para);
-    std::thread(randomFunc2, para, rand3).detach();
-
-    while (1)
-    {
-        io::coSelector multi(rand1, rand2, rand3);         //memory leak test, deconstruct and reconstruct constantly. In usual programming, we don't do this.
-        co_await *multi;
-        std::cout << "triggered!" << std::endl;
-        if (rand1.isSettled())
-        {
-            std::cout << "rand recv: 1" << std::endl;
-            rand1.reset();
-        }
-        if (rand2.isSettled())
-        {
-            std::cout << "rand recv: 2" << std::endl;
-            rand2.reset();
-        }
-        if (rand3.isSettled())
-        {
-            std::cout << "rand recv: 3" << std::endl;
-            rand3.reset();
-        }
-        multi.remove(rand1);
-        multi.remove(rand2);
-        multi.remove(rand3);
-    }
-}
-
-io::coDispatchedTask<std::string> test_disptask(io::ioManager* mngr)
-{
-    io::coPromise<std::string> prom;
-    co_yield prom;
-    prom.setTimeout(std::chrono::microseconds(100000));
-    auto& str = *prom.data();
-    str = "deconstruction!";
-    co_await *prom;
-    if (prom.isTimeout())
-    {
-        std::cout << "timeout!" << std::endl;
+        handle = fsm.spawn_now([](io::chan_r<char> chan, size_t *count) -> io::fsm_func<void>
+                               {
+            io::fsm<void>& fsm = co_await io::get_fsm;
+            while (1)
+            {
+                io::chan<char>::span_guard recv;        //zero copy span guard object.
+                co_await(chan >> recv);
+                if (count)
+                    *count += 10240;
+                else
+                    std::cout << recv.span.data() << std::endl;
+            } }(chan, count));
     }
     else
     {
-        std::cout << str << std::endl;
-    }
-}
-
-io::coTask test_disp(io::ioManager* para)
-{
-    io::coPromise<> delayer(para);
-    while (1)
-    {
-        io::coDispatcher<int, std::string> taskTable;   // such as nat table
-        while (1)
-        {
-            int i = rand() % 1000 + 100;
-            if (i % 1000 != 0)
+        handle = fsm.spawn_now([](io::chan_r<char> ch, size_t *count) -> io::fsm_func<void>
+                               {
+            std::string str;
+            str.resize(10240);
+            io::fsm<void>& fsm = co_await io::get_fsm;
+            while (1)
             {
-                auto prom = taskTable.find(i);
-                if (prom == nullptr)
-                {
-                    taskTable.invoke(i, test_disptask, para);
-                }
+                io::future_with<std::span<char>> futur;
+                ch.get_and_copy(std::span<char>(str), futur);
+                co_await futur;
+                if (count)
+                    *count += 10240;
                 else
-                {
-                    *prom.data() = "collision!";
-                    prom.rejectLocal();
-                }
-                co_await delayer.delay(std::chrono::microseconds(1));
-                delayer.reset();
-            }
-            else // 1/1000 case to deconstruct dispatcher
-            {
-                break;
-            }
-        }
+                    std::cout << str << std::endl;
+            } }(chan, count));
+    }
+
+    while (1)
+    {
+        char send[] = "this is a very long long string. ";
+        std::span<char> send_span(send, sizeof(send));
+        co_await (chan << send_span);
     }
 }
 
-io::coTask tcp_echo_connect(io::ioManager* mngr, io::tcp::socket socket)
+io::fsm_func<void> coro_chan_benchmark()
 {
+    constexpr size_t TEST_SECONDS = 3;
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    size_t byte_count = 0;
+    io::fsm_handle<void> h = fsm.spawn_now(coro_chan(&byte_count));
+    io::clock clock;
+    fsm.make_clock(clock, std::chrono::seconds(TEST_SECONDS));
+    co_await clock;
+
+    double mb_total = byte_count / (1024.0 * 1024.0);
+    double mb_per_second = mb_total / TEST_SECONDS;
+
+    std::cout << "Total data transmitted in " << TEST_SECONDS << " seconds: " << std::fixed << std::setprecision(2)
+              << mb_total << " MB" << std::endl;
+    std::cout << "Average throughput: " << mb_per_second << " MB/s" << std::endl;
+
+    fsm.getManager()->spawn_later(coro_chan_benchmark()).detach();
+}
+
+io::fsm_func<void> coro_benchmark()
+{
+    // High speed low drag!
+    constexpr size_t NUM_COROS = 30000;        // num of coroutines
+    constexpr size_t TOTAL_SWITCHES = 3000000; // switch sum
+
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    std::vector<io::fsm_handle<io::promise<>>> test_coros;
+
+    auto start_coro = std::chrono::high_resolution_clock::now();
+
+    // prepare for coroutine loop
+    for (size_t i = 0; i < NUM_COROS; i++)
+    {
+        test_coros.push_back(
+            fsm.spawn_now([]() -> io::fsm_func<io::promise<>>
+                          {
+                io::fsm<io::promise<>>& fsm = co_await io::get_fsm;
+                io::future future;
+                while(1)
+                {
+                    *fsm.data() = fsm.make_future(future);
+                    co_await future;
+                } }()));
+    }
+
+    auto start_loop = std::chrono::high_resolution_clock::now();
+
+    // start loop
+    for (size_t i = 0; i < TOTAL_SWITCHES; i++)
+    {
+        size_t ind = i % NUM_COROS;
+        test_coros[ind]->resolve();
+    }
+
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration_coro = std::chrono::duration_cast<std::chrono::microseconds>(start_loop - start_coro);
+    auto duration_loop = std::chrono::duration_cast<std::chrono::microseconds>(end - start_loop);
+    double creates_per_sec = NUM_COROS * 1000000.0 / duration_coro.count();
+    double switches_per_sec = TOTAL_SWITCHES * 1000000.0 / duration_loop.count();
+
+    std::cout << "Benchmark Results:\n"
+              << "Number of coroutines: " << NUM_COROS << "\n"
+              << "Total time: " << duration_coro.count() / 1000.0 << " ms\n"
+              << "Spawn per second: " << static_cast<size_t>(creates_per_sec) << "\n"
+              << "Average spawn time: " << duration_coro.count() / double(NUM_COROS) * 1000.0 << " ns\n\n"
+              << "Total switches: " << TOTAL_SWITCHES << "\n"
+              << "Total time: " << duration_loop.count() / 1000.0 << " ms\n"
+              << "Switches per second: " << static_cast<size_t>(switches_per_sec) << "\n"
+              << "Average switch time: " << duration_loop.count() / double(TOTAL_SWITCHES) * 1000.0 << " ns\n\n\n\n";
+
+    fsm.getManager()->spawn_later(coro_benchmark()).detach();
+}
+
+io::fsm_func<void> coro_tcp_echo_server()
+{
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    io::tcp::acceptor acceptor(12345);
+    std::cout << "TCP Echo Server started, waiting for connections on port 12345..." << std::endl;
+
     while (1)
     {
-        io::coPromise<io::buffer> recv_promise = socket.recv_io();
-        io::buffer* data = co_await *recv_promise;
-        if (recv_promise.isResolve())
+        co_await acceptor.wait_accept(fsm);
+        io::tcp::socket sock;
+        if (acceptor.accept(sock))
         {
-            co_await *socket.send_io(data->data(), data->size());
-            data->clear();
+            std::cout << "New connection accepted!" << std::endl;
+            fsm.spawn_now(
+                   [](io::tcp::socket socket) -> io::fsm_func<void>
+                   {
+                       while (1)
+                       {
+                           io::fsm<void> &fsm = co_await io::get_fsm;
+                           io::future afut = socket.wait_read(fsm);
+                           co_await afut;
+                           if (afut.getErr())
+                           {
+                               std::cerr << "Error while reading from socket: " << afut.getErr().message() << std::endl;
+                               co_return;
+                           }
+
+                           auto read_sp = socket.read();
+                           afut = socket.wait_send(fsm, read_sp);
+                           co_await afut;
+                           if (afut.getErr())
+                           {
+                               std::cerr << "Error while sending data to socket: " << afut.getErr().message() << std::endl;
+                               co_return;
+                           }
+
+                           std::cout << "Echoed data back to client!" << std::endl;
+                       }
+                   }(std::move(sock)))
+                .detach();
         }
         else
-            break;
-    }
-    co_return;
-}
-
-io::coTask tcp_echo_server(io::ioManager* mngr)
-{
-    io::tcp::acceptor server(1000, mngr, asio::ip::tcp::endpoint{ asio::ip::tcp::v4(), 12345 });
-    while (1)
-    {
-        io::coPromise<io::tcp::socket> promise = server.accept_io();
-        io::tcp::socket* data = co_await *promise;
-        tcp_echo_connect(mngr, std::move(*data));
-    }
-    co_return;
-}
-
-io::coTask udp_echo(io::ioManager* mngr)
-{
-    io::udp::socket server(1000, mngr, asio::ip::udp::endpoint{ asio::ip::udp::v4(), 12345 });
-    while (1)
-    {
-        io::coPromise<std::tuple<io::buffer, asio::ip::udp::endpoint>> promise = server.recv_io();
-        auto& [buffer, addr] = *co_await *promise;
-        co_await *server.send_io(addr, buffer.data(), buffer.size());
-        buffer.clear();
-    }
-    co_return;
-}
-
-void io_testmain()
-{
-    io::ioManager context;
-
-    //asio coroutine benchmark
-    if (false)
-    {
-        asio::io_context asio_(1);
-        for (int i = 0; i < 250000; i++)   //asio coroutine is about one fourth CPU performance compare with ioManager, memory usage:400MB at 250k coroutines.
         {
-            asio::co_spawn(asio_, asioCoroTest, asio::detached);
+            std::cerr << "Failed to accept connection!" << std::endl;
         }
+    }
+    co_return;
+    std::cout << "Server stopped." << std::endl;
+}
+
+io::fsm_func<void> coro_tcp_echo_client()
+{
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    std::cout << "TCP Echo Client started." << std::endl;
+
+    while (1)
+    {
+        io::tcp::socket client;
+        io::future fut = client.connect(fsm, asio::ip::tcp::endpoint(asio::ip::address::from_string("192.168.142.1"), 12345));
+        co_await fut;
+
+        if (fut.getErr())
+        {
+            std::cerr << "Failed to connect to server: " << fut.getErr().message() << std::endl;
+            io::clock clock;
+            fsm.make_clock(clock, std::chrono::seconds(1));
+            co_await clock;
+            continue;
+        }
+
+        std::cout << "Connected to server at " << client.remote_endpoint() << std::endl;
+
         while (1)
         {
-            asio_.run();
+            std::cout << "Local endpoint: " << client.local_endpoint() << std::endl;
+
+            io::future afut = client.wait_read(fsm);
+            io_select(afut, {});
+            if (afut.getErr())
+            {
+                std::cerr << "Error while waiting for data to read: " << afut.getErr().message() << std::endl;
+                break;
+            }
+
+            auto read_sp = client.read();
+            afut = client.wait_send(fsm, read_sp);
+            co_await afut;
+
+            if (afut.getErr())
+            {
+                std::cerr << "Error while sending data: " << afut.getErr().message() << std::endl;
+                break;
+            }
+
+            std::cout << "Sent data to server." << std::endl;
         }
     }
+}
 
-    //coroutine library benchmark
-    if (false)
-    {
-        io::ioManager::auto_go(1);  //single thread
-        for (int i = 0; i < 1000000; i++)   //less than 1 us per task recircle when in 1M coroutines, memory usage:460MB
-        {
-            io::ioManager::auto_once(benchmark_coroutine);
-        }
-        std::this_thread::sleep_for(std::chrono::years(30));
-    }
+io::fsm_func<void> coro_udp_echo()
+{
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    std::cout << "UDP Echo Server started on port 12345..." << std::endl;
 
-    //coSelector test
-    if (false)
-    {
-        io::ioManager::auto_go(1);
-        io::ioManager::auto_once(test_multi);
-        std::this_thread::sleep_for(std::chrono::years(30));
-    }
-
-    //coDispatcher test
-    if (true)
-    {
-        io::ioManager::auto_go(1);
-        io::ioManager::auto_once(test_disp);
-        std::this_thread::sleep_for(std::chrono::years(30));
-    }
-
-    //tcp echo
-    if (false)
-    {
-        tcp_echo_server(&context);
-    }
-
-    //udp echo
-    if (false)
-    {
-        udp_echo(&context);
-    }
-
-    //coroutine test
-    for (int i = 0; i < 64; i++)
-    {
-        //io::ioManager::auto_once(test_udp_client);
-    }
     while (1)
     {
-        context.drive();
+        io::udp::socket client;
+        asio::error_code ec;
+        client.open(asio::ip::udp::v4(), ec);
+
+        if (ec)
+        {
+            std::cerr << "Failed to open UDP socket: " << ec.message() << std::endl;
+            break;
+        }
+
+        client.bind(asio::ip::udp::endpoint(asio::ip::udp::v4(), 12345), ec);
+
+        if (ec)
+        {
+            std::cerr << "Failed to bind UDP socket: " << ec.message() << std::endl;
+            break;
+        }
+
+        io::future afut = client.wait_read(fsm);
+        co_await afut;
+        if (afut.getErr())
+        {
+            std::cerr << "Error while reading from UDP socket: " << afut.getErr().message() << std::endl;
+            break;
+        }
+
+        auto [read_sp, peer] = client.read();
+        std::cout << "Received message from " << peer << std::endl;
+
+        afut = client.wait_send(fsm, read_sp, peer);
+        co_await afut;
+
+        if (afut.getErr())
+        {
+            std::cerr << "Error while sending message back to peer: " << afut.getErr().message() << std::endl;
+            break;
+        }
+
+        std::cout << "Echoed message back to " << peer << std::endl;
+    }
+}
+
+void io_testmain_v3()
+{
+    io::manager mngr;
+
+    // test of skip table
+    if (false)
+    {
+        {
+            std::chrono::high_resolution_clock::time_point start = std::chrono::high_resolution_clock::now();
+
+            io::hive<int> allocator(2000000);
+            io::skip_table<int> skipTableTest(7, 2000000);
+            std::vector<io::skip_table<int>::iterator> iters;
+            iters.reserve(1000000);
+            for (int i = 0; i < 1000000; i++)
+            {
+                int rands = rand() * rand();
+                // int* ptr = new int(rands);
+                int *ptr = allocator.emplace(rands);
+                io::skip_table<int>::iterator iter = skipTableTest.insert(ptr, rands);
+                iters.push_back(iter);
+            }
+            for (auto &iter : iters)
+            {
+                int *ptr = skipTableTest.erase(iter);
+                // delete ptr;
+                allocator.erase(ptr);
+            }
+            iters.clear();
+
+            std::cout << "skip table loop complete! spend: " << std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now() - start).count() / 1000.0 << std::endl;
+        }
+        // contrast (rb tree)
+        {
+            std::chrono::high_resolution_clock::time_point start = std::chrono::high_resolution_clock::now();
+
+            io::hive<int> allocator(2000000);
+            std::multimap<int, int *> rbt;
+            std::vector<std::multimap<int, int *>::iterator> iters;
+            iters.reserve(1000000);
+            for (int i = 0; i < 1000000; i++)
+            {
+                int rands = rand() * rand();
+                // int* ptr = new int(rands);
+                int *ptr = allocator.emplace(rands);
+                auto iter = rbt.insert(std::make_pair(rands, ptr));
+                iters.push_back(iter);
+            }
+            for (auto &iter : iters)
+            {
+                int *ptr = iter->second;
+                rbt.erase(iter);
+                // delete ptr;
+                allocator.erase(ptr);
+            }
+            iters.clear();
+
+            std::cout << "rb tree loop complete! spend: " << std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now() - start).count() / 1000.0 << std::endl;
+        }
+    }
+
+    // test of basic coroutine method
+    if (false)
+        mngr.spawn_later(coro_demo(100)).detach();
+
+    // limit test
+    if (false)
+        mngr.spawn_later(coro_limit_test(10000000)).detach();
+
+    // test of multi-thread
+    if (false)
+        mngr.spawn_later(coro_multi_thread()).detach();
+
+    // test of chan
+    if (false)
+    {
+        if (true)
+            mngr.spawn_later(coro_chan_benchmark()).detach();
+        else
+            mngr.spawn_later(coro_chan(nullptr)).detach();
+    }
+
+    // coroutine benchmark
+    if (false)
+        mngr.spawn_later(coro_benchmark()).detach();
+
+    // tcp echo server
+    if (true)
+        mngr.spawn_later(coro_tcp_echo_server()).detach();
+
+    // tcp echo client
+    if (false)
+        mngr.spawn_later(coro_tcp_echo_client()).detach();
+
+    // udp echo
+    if (false)
+        mngr.spawn_later(coro_udp_echo()).detach();
+
+    while (1)
+    {
+        mngr.drive();
     }
 }
