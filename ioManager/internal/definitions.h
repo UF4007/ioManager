@@ -246,8 +246,8 @@ inline bool io::async_promise::resolve() {
 inline bool io::async_promise::reject(std::error_code ec) {
     if (this->awaiter) {
         this->awaiter->no_tm.err = ec;
-        awaiter = nullptr;
         auto temp = awaiter;
+        awaiter = nullptr;
         temp->queue_in(&temp->mngr->reject_queue);
         return true;
     }
