@@ -1104,6 +1104,21 @@ namespace io
             inline bool isClosed() {
                 return this->getPtr()->closed;
             }
+            inline bool isFull() {
+                return this->getPtr()->is_full;
+            }
+            inline size_t size() {
+                auto base = this->getPtr();
+                if (base->is_full)
+                    return base->capacity;
+                if (base->write_pos >= base->read_pos)
+                    return base->write_pos - base->read_pos;
+                else
+                    return (base->capacity - (base->write_pos - base->read_pos));
+            }
+            inline size_t capacity() {
+                return this->getPtr()->capacity;
+            }
             //close, this will deconstruct all element in buffer, and resume all coroutines.
             inline void close() {
                 return this->getPtr()->close();
@@ -1977,6 +1992,14 @@ namespace io
                 __IO_INTERNAL_HEADER_PERMISSION;
 
                 inline socket() {}
+
+                inline socket(uint16_t port) {
+                    asio::error_code ec;
+                    asio_sock.open(asio::ip::udp::v4(), ec);
+                    if (!ec) {
+                        asio_sock.bind(asio::ip::udp::endpoint(asio::ip::udp::v4(), port), ec);
+                    }
+                }
 
                 template <typename T_FSM>
                 inline async_future wait_read(fsm<T_FSM>& state_machine, size_t size = BUF_SIZE) {
