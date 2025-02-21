@@ -44,6 +44,8 @@ io::fsm_func<void> coro_limit_test(int num)
 
 io::fsm_func<void> coro_multi_thread()
 {
+    auto& fsm = co_await io::get_fsm;
+
     co_return;
 }
 

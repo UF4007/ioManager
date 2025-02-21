@@ -1386,6 +1386,7 @@ namespace io
             // UB: Try get data when a fsm had been detached.
             inline T* data() requires (!std::is_same_v<T, void>) { return &_fsm->_fsm._data; }
             inline T* operator->() requires (!std::is_same_v<T, void>) { return &_fsm->_fsm._data; }
+            inline void destroy() { this->decons(); _fsm = nullptr; }
             inline operator bool() {
                 return _fsm;
             }
@@ -1462,7 +1463,7 @@ namespace io
                         continue;
                     }
 
-                    if (!result && key == *it) {
+                    if (!result && key == *it->data()) {
                         result = &(*it);
                     }
                     ++it;
