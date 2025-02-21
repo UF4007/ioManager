@@ -24,6 +24,7 @@
 #include <semaphore>
 #include <algorithm>
 #include <type_traits>
+#include <functional>
 #include "selectMarco.h"
 //#include "../asio/asio.hpp"
 #include "../asio/asio/buffer.hpp"
