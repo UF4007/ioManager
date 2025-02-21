@@ -1,28 +1,4 @@
-//skip table
-template <typename T>
-inline io::skip_table<T>::iterator io::skip_table<T>::iterator::operator ++(int) {
-    iterator ret;
-    ret.node = this->node;
-    this->node = this->node->node.next;
-    return ret;
-}
-template <typename T>
-inline io::skip_table<T>::iterator& io::skip_table<T>::iterator::operator ++() {
-    this->node = this->node->node.next;
-    return *this;
-}
-template <typename T>
-inline io::skip_table<T>::iterator io::skip_table<T>::iterator::operator --(int) {
-    iterator ret;
-    ret.node = this->node;
-    this->node = this->node->node.prev;
-    return ret;
-}
-template <typename T>
-inline io::skip_table<T>::iterator& io::skip_table<T>::iterator::operator --() {
-    this->node = this->node->node.prev;
-    return *this;
-}
+
 
 
 
@@ -46,6 +22,14 @@ inline void io::lowlevel::awaiter::queue_in(await_queue* queue)
 template <typename T_spawn>
 [[nodiscard]] inline io::fsm_handle<T_spawn> io::lowlevel::fsm_base::spawn_now(fsm_func<T_spawn> new_fsm)
 {
+    if constexpr (io::is_future_with<T_spawn>::value)
+    {
+        this->mngr->make_future(new_fsm._data->_fsm._data, &new_fsm._data->_fsm._data.data);
+    }
+    else if constexpr (io::is_future<T_spawn>::value)
+    {
+        this->mngr->make_future(new_fsm._data->_fsm._data);
+    }
     new_fsm._data->_fsm.mngr = this->mngr;
     std::coroutine_handle<fsm_promise<T_spawn>> h;
     h = h.from_promise(*new_fsm._data);
@@ -210,6 +194,32 @@ inline void io::future::decons() noexcept {
             this->awaiter->bit_set &= ~this->awaiter->future_handled;
     }
 }
+inline io::promise<void> io::future::getPromise() {
+    if (awaiter)
+    {
+        if ((awaiter->promise_handled & awaiter->bit_set) == false &&
+            (awaiter->occupy_lock & awaiter->bit_set) == false)
+        {
+            awaiter->bit_set |= awaiter->promise_handled;
+            return io::promise<>(awaiter);
+        }
+    }
+    return {};
+}
+//future with
+template<typename T>
+inline io::promise<T> io::future_with<T>::getPromise() {
+    if (awaiter)
+    {
+        if ((awaiter->promise_handled & awaiter->bit_set) == false &&
+            (awaiter->occupy_lock & awaiter->bit_set) == false)
+        {
+            awaiter->bit_set |= awaiter->promise_handled;
+            return io::promise<T>(awaiter, &this->data);
+        }
+    }
+    return {};
+}
 
 
 
@@ -224,6 +234,62 @@ inline void io::clock::decons() noexcept {
         }
     }
 }
+inline bool io::clock::set() {
+    if (this->awaiter)
+    {
+        if ((this->awaiter->bit_set & this->awaiter->set_lock) == false)
+        {
+            this->awaiter->mngr->time_chain.erase(this->awaiter->tm);
+            promise<void> prom(this->awaiter);
+            prom.resolve();
+            return true;
+        }
+        return false;
+    }
+    return false;
+}
+inline bool io::clock::set_later() {
+    if (this->awaiter)
+    {
+        if ((this->awaiter->bit_set & this->awaiter->set_lock) == false)
+        {
+            this->awaiter->mngr->time_chain.erase(this->awaiter->tm);
+            promise<void> prom(this->awaiter);
+            prom.resolve_later();
+            return true;
+        }
+        return false;
+    }
+    return false;
+}
+
+
+
+//timer
+//inline void io::timer::reset(
+//    mode_t mode,
+//    std::chrono::steady_clock::duration interval,
+//    size_t _stop_count,
+//    size_t _count)
+//{
+//    if (this->_mode == counter ||
+//        this->_mode == up_timer)
+//        when_count_future2.getPromise().reject(std::make_error_code(std::errc::connection_reset));
+//    when_stop_future.getPromise().reject(std::make_error_code(std::errc::connection_reset));
+//    if (interval != std::chrono::seconds(0))
+//    {
+//        this->_interval = interval;
+//    }
+//    this->count_num = _count;
+//    if (mode != still_mode)
+//    {
+//        this->_mode = mode;
+//    }
+//    if (_stop_count != 0)
+//    {
+//        this->stop_count = _stop_count;
+//    }
+//}
 
 
 

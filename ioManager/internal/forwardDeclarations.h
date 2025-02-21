@@ -54,3 +54,11 @@ namespace udp {
 };
 
 #define IO_MANAGER_FORWARD_FUNC(___obj___,___func___) template <typename ...Args> auto ___func___(Args&&...args) { return ___obj___.___func___(std::forward<Args>(args)...); }
+
+#define IO_MANAGER_BAN_COPY(___obj___)     \
+    ___obj___(const ___obj___ &) = delete; \
+    ___obj___ &operator=(const ___obj___ &) = delete;
+
+#define IO_MANAGER_BAN_MOVE(___obj___)  \
+    ___obj___(___obj___ &&) = delete;   \
+    ___obj___ &operator=(___obj___ &&) = delete;

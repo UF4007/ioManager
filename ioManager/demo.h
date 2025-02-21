@@ -189,16 +189,16 @@ io::fsm_func<void> coro_tcp_echo_server()
                        while (1)
                        {
                            io::fsm<void> &fsm = co_await io::get_fsm;
-                           io::future afut = socket.wait_read(fsm);
-                           co_await afut;
-                           if (afut.getErr())
+                           co_await socket.wait_read(fsm);
+                           auto read_err = socket.readGetErr();
+                           if (read_err)
                            {
-                               std::cerr << "Error while reading from socket: " << afut.getErr().message() << std::endl;
+                               std::cerr << "Error while reading from socket: " << read_err.message() << std::endl;
                                co_return;
                            }
 
                            auto read_sp = socket.read();
-                           afut = socket.wait_send(fsm, read_sp);
+                           io::async_future afut = socket.wait_send(fsm, read_sp);
                            co_await afut;
                            if (afut.getErr())
                            {
@@ -246,16 +246,16 @@ io::fsm_func<void> coro_tcp_echo_client()
         {
             std::cout << "Local endpoint: " << client.local_endpoint() << std::endl;
 
-            io::future afut = client.wait_read(fsm);
-            io_select(afut, {});
-            if (afut.getErr())
+            io_select(client.wait_read(fsm), {});
+            auto read_err = client.readGetErr();
+            if (read_err)
             {
-                std::cerr << "Error while waiting for data to read: " << afut.getErr().message() << std::endl;
+                std::cerr << "Error while waiting for data to read: " << read_err.message() << std::endl;
                 break;
             }
 
             auto read_sp = client.read();
-            afut = client.wait_send(fsm, read_sp);
+            io::future afut = client.wait_send(fsm, read_sp);
             co_await afut;
 
             if (afut.getErr())
@@ -294,18 +294,18 @@ io::fsm_func<void> coro_udp_echo()
             break;
         }
 
-        io::future afut = client.wait_read(fsm);
-        co_await afut;
-        if (afut.getErr())
+        co_await client.wait_read(fsm);
+        auto read_err = client.readGetErr();
+        if (read_err)
         {
-            std::cerr << "Error while reading from UDP socket: " << afut.getErr().message() << std::endl;
+            std::cerr << "Error while reading from UDP socket: " << read_err.message() << std::endl;
             break;
         }
 
         auto [read_sp, peer] = client.read();
         std::cout << "Received message from " << peer << std::endl;
 
-        afut = client.wait_send(fsm, read_sp, peer);
+        io::future afut = client.wait_send(fsm, read_sp, peer);
         co_await afut;
 
         if (afut.getErr())
@@ -321,63 +321,6 @@ io::fsm_func<void> coro_udp_echo()
 void io_testmain_v3()
 {
     io::manager mngr;
-
-    // test of skip table
-    if (false)
-    {
-        {
-            std::chrono::high_resolution_clock::time_point start = std::chrono::high_resolution_clock::now();
-
-            io::hive<int> allocator(2000000);
-            io::skip_table<int> skipTableTest(7, 2000000);
-            std::vector<io::skip_table<int>::iterator> iters;
-            iters.reserve(1000000);
-            for (int i = 0; i < 1000000; i++)
-            {
-                int rands = rand() * rand();
-                // int* ptr = new int(rands);
-                int *ptr = allocator.emplace(rands);
-                io::skip_table<int>::iterator iter = skipTableTest.insert(ptr, rands);
-                iters.push_back(iter);
-            }
-            for (auto &iter : iters)
-            {
-                int *ptr = skipTableTest.erase(iter);
-                // delete ptr;
-                allocator.erase(ptr);
-            }
-            iters.clear();
-
-            std::cout << "skip table loop complete! spend: " << std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now() - start).count() / 1000.0 << std::endl;
-        }
-        // contrast (rb tree)
-        {
-            std::chrono::high_resolution_clock::time_point start = std::chrono::high_resolution_clock::now();
-
-            io::hive<int> allocator(2000000);
-            std::multimap<int, int *> rbt;
-            std::vector<std::multimap<int, int *>::iterator> iters;
-            iters.reserve(1000000);
-            for (int i = 0; i < 1000000; i++)
-            {
-                int rands = rand() * rand();
-                // int* ptr = new int(rands);
-                int *ptr = allocator.emplace(rands);
-                auto iter = rbt.insert(std::make_pair(rands, ptr));
-                iters.push_back(iter);
-            }
-            for (auto &iter : iters)
-            {
-                int *ptr = iter->second;
-                rbt.erase(iter);
-                // delete ptr;
-                allocator.erase(ptr);
-            }
-            iters.clear();
-
-            std::cout << "rb tree loop complete! spend: " << std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now() - start).count() / 1000.0 << std::endl;
-        }
-    }
 
     // test of basic coroutine method
     if (false)
@@ -401,11 +344,11 @@ void io_testmain_v3()
     }
 
     // coroutine benchmark
-    if (false)
+    if (true)
         mngr.spawn_later(coro_benchmark()).detach();
 
     // tcp echo server
-    if (true)
+    if (false)
         mngr.spawn_later(coro_tcp_echo_server()).detach();
 
     // tcp echo client

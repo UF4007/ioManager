@@ -30,32 +30,6 @@ namespace io
             formaterr = 7,      //format error
         };
 
-        template <typename T>
-        struct ban_copy : public T {
-            template<typename ...Args>
-            ban_copy(Args&&...args) :T(std::forward<Args>(args)...) {}
-            ban_copy(const ban_copy&) = delete;
-            ban_copy& operator =(const ban_copy&) = delete;
-        };
-
-        template <typename T>
-        struct ban_move : public T {
-            template<typename ...Args>
-            ban_move(Args&&...args) :T(std::forward<Args>(args)...) {}
-            ban_move(ban_move&&) = delete;
-            ban_move& operator =(ban_move&&) = delete;
-        };
-
-        template <typename T>
-        struct ban_copy_and_move :public T {
-            template<typename ...Args>
-            ban_copy_and_move(Args&&...args) :T(std::forward<Args>(args)...) {}
-            ban_copy_and_move(const ban_copy_and_move&) = delete;
-            ban_copy_and_move& operator =(const ban_copy_and_move&) = delete;
-            ban_copy_and_move(ban_copy_and_move&&) = delete;
-            ban_copy_and_move& operator =(ban_copy_and_move&&) = delete;
-        };
-
         //Generic memory pool for single type category. 
         // Not Thread safe.
         template <typename T>
@@ -127,275 +101,6 @@ namespace io
             const size_t size_limit;
             static constexpr double erase_multiple = 0.5;  // in (0,1) zone
             static constexpr bool debug = false;
-        };
-
-        //Skip table. All sides are not as good as std::map. Don't use. No wonder it is not in std::.
-        // Not Thread safe.
-        // We store the pointer of T, rather object.
-        // Use an io::hive in it to manage the memory of chains.
-        template <typename T>
-        struct skip_table {
-        private:
-            struct chain;
-        public:
-            struct iterator
-            {
-                friend struct skip_table;
-                iterator operator ++(int);
-                iterator& operator ++();
-                iterator operator --(int);
-                iterator& operator --();
-                inline T* operator->() {
-                    return node->subo_awaiter;
-                }
-                inline T* operator*() {
-                    return node->subo_awaiter;
-                }
-                inline bool operator ==(const iterator iter) const {
-                    return this->node == iter.node;
-                }
-                inline bool operator !=(const iterator iter) const {
-                    return this->node != iter.node;
-                }
-            private:
-                chain* node;
-            };
-            size_t skip_per;
-            inline skip_table() :skip_table(7, 1000) {}
-            inline skip_table(size_t skip_per, size_t hive_capacity) : skip_per(skip_per), chain_hive(hive_capacity)
-            {
-                primary_levels.emplace_back();
-            }
-
-        private:
-            io::hive<chain> chain_hive;
-            struct node_t {
-                chain* prev;
-                chain* next;
-                size_t count = 0;
-            };
-            struct chain {
-                node_t node;
-                //std::chrono::steady_clock::time_point timeout;
-                size_t sign_v;
-                chain* upon_chain = nullptr;    // to up level skip table
-                union {
-                    T* subo_awaiter = nullptr;
-                    chain* subo_chain;          // to subordinate level skip table
-                };
-            };
-            struct primary_chain {
-                node_t node;
-                size_t step = 0;
-                inline primary_chain() {
-                    //node.next = (chain*)this;	// no, this is ub
-                    auto s = this;
-                    std::memcpy(&node.next, &s, sizeof(this));
-                    std::memcpy(&node.prev, &s, sizeof(this));
-                }
-            };
-            std::deque<primary_chain> primary_levels;
-            inline bool null_check(size_t level) {
-                auto s = &primary_levels[level];
-                return std::memcmp(&primary_levels[level].node.next, &s, sizeof(this)) == 0;
-            }
-            inline void erase_recusive(chain* node, size_t level) {
-                node->node.next->node.prev = node->node.prev;
-                node->node.prev->node.next = node->node.next;
-                if (node->upon_chain == nullptr)
-                {
-                    primary_levels[level].node.count--;
-                }
-                else
-                {
-                    node->upon_chain->node.count--;
-                    if (node->upon_chain->node.count == 0)  //district does not have any member, erase it then
-                    {
-                        erase_recusive(node->upon_chain, 1 + level);
-                    }
-                    else if (node->upon_chain->subo_chain == node)  //district boundary, push it back
-                    {
-                        node->upon_chain->subo_chain = node->node.next;
-                        node->upon_chain->sign_v = node->node.next->sign_v;
-                    }
-                }
-                if (level != 0)
-                {
-                    if (null_check(level))    //if this top layer does not have anything
-                    {
-                        primary_levels.erase(primary_levels.end() - 1);       //erase this top layer
-                    }
-                }
-                chain_hive.erase(node);
-            }
-        public:
-            inline T* erase(iterator it) {
-                auto ret = it.node->subo_awaiter;
-                erase_recusive(it.node, 0);
-                return ret;
-            }
-            // we use sign value( = timeout = size_t) to accelerate find, rather operator <
-            inline iterator insert(T* ptr, size_t sign_v) {
-                bool isInitial = false;
-                for (int i = 0; i < primary_levels.size(); i++)
-                {
-                    primary_levels[i].step = 0;
-                }
-
-                // find a insert position. we insert new chain after this pointer.
-                chain* insert_pos_after = [&] {
-                    chain* ret;
-                    primary_chain* s = &primary_levels[0];
-                    if (null_check(0))
-                    {
-                        isInitial = true;
-                        std::memcpy(&ret, &s, sizeof(this));
-                        return ret;
-                    }
-                    if (primary_levels[0].node.next->sign_v <= sign_v)
-                    {
-                        isInitial = true;
-                        std::memcpy(&ret, &s, sizeof(this));
-                        return ret;
-                    }
-                    chain* last_prim = primary_levels[0].node.next;
-                    chain* prim = nullptr;
-                    int i = 1;
-                    for (; i < primary_levels.size(); i++)
-                    {
-                        prim = primary_levels[i].node.next;
-                        if (prim->sign_v <= sign_v)     //district confrim, loop back to the bottom
-                        {
-                            i--;
-                            primary_levels[i].step++;
-                            prim = last_prim->node.next;    //it definitely have a next.
-                            while (i)
-                            {
-                                while (prim->sign_v > sign_v)
-                                {
-                                    last_prim = prim;
-                                    prim = prim->node.next;
-                                    primary_levels[i].step++;
-                                }
-                                last_prim = last_prim->subo_chain;
-                                prim = last_prim->node.next;
-                                i--;
-                            }
-                            while (prim->sign_v > sign_v)
-                            {
-                                last_prim = prim;
-                                prim = prim->node.next;
-                                primary_levels[i].step++;
-                            }
-                            return last_prim;
-                        }
-                        last_prim = prim;
-                    }
-                    //loop out, the target district must be in the top layer.
-                    prim = primary_levels[--i].node.next;
-                    primary_levels[i].step++;
-                    while (i)
-                    {
-                        primary_chain* s = &primary_levels[i];
-                        while (std::memcmp(&prim->node.next, &s, sizeof(this)) != 0 &&
-                            prim->node.next->sign_v > sign_v)
-                        {
-                            prim = prim->node.next;
-                            primary_levels[i].step++;
-                        }
-                        prim = prim->subo_chain;
-                        i--;
-                    }
-                    while (std::memcmp(&prim->node.next, &s, sizeof(this)) != 0 &&
-                        prim->node.next->sign_v > sign_v)
-                    {
-                        prim = prim->node.next;
-                        primary_levels[i].step++;
-                    }
-                    return prim;
-                    }();
-
-                //insert after
-                int i = 0;
-                iterator ret;
-                chain* new_chain = chain_hive.emplace();
-                ret.node = new_chain;
-                new_chain->subo_awaiter = ptr;
-                new_chain->sign_v = sign_v;
-                while (1)
-                {
-                    //merge a new chain
-                    chain** slot1 = &insert_pos_after->node.next;
-                    chain** slot2 = &(insert_pos_after->node.next->node.prev);
-                    new_chain->node.prev = insert_pos_after;
-                    new_chain->node.next = insert_pos_after->node.next;
-                    *slot1 = *slot2 = new_chain;
-                    if (isInitial == false)
-                        new_chain->upon_chain = insert_pos_after->upon_chain;
-                    if (isInitial == true
-                        || new_chain->upon_chain == nullptr)
-                    {
-                        if (++primary_levels[i].node.count > skip_per)
-                        {
-                            isInitial = true;
-                            i++;
-                            if (i == primary_levels.size())
-                            {
-                                primary_levels.emplace_back();
-                            }
-                            auto s = &primary_levels[i];
-                            std::memcpy(&insert_pos_after, &s, sizeof(this));
-                            auto subo = new_chain;
-                            new_chain = chain_hive.emplace();
-                            new_chain->subo_chain = subo;
-                            new_chain->sign_v = sign_v;
-                            new_chain->node.count = primary_levels[i - 1].node.count - primary_levels[i - 1].step;
-                            for (int k = 0; k < new_chain->node.count; k++)
-                            {
-                                subo->upon_chain = new_chain;
-                                subo = subo->node.next;
-                            }
-                            primary_levels[i - 1].node.count = primary_levels[i - 1].step;
-                        }
-                        else
-                            break;
-                    }
-                    else
-                    {
-                        if (++new_chain->upon_chain->node.count > skip_per)
-                        {
-                            i++;
-                            insert_pos_after = new_chain->upon_chain;
-                            auto subo = new_chain;
-                            new_chain = chain_hive.emplace();
-                            new_chain->subo_chain = subo;
-                            new_chain->sign_v = sign_v;
-                            new_chain->node.count = insert_pos_after->node.count - primary_levels[i - 1].step - 1;
-                            assert(new_chain->node.count <= skip_per * 2);
-                            for (int k = 0; k < new_chain->node.count; k++)
-                            {
-                                subo->upon_chain = new_chain;
-                                subo = subo->node.next;
-                            }
-                            insert_pos_after->node.count = primary_levels[i - 1].step + 1;
-                        }
-                        else
-                            break;
-                    }
-                }
-                return ret;
-            }
-            inline iterator begin() {
-                iterator ret;
-                ret.node = primary_levels[0].node.next;
-                return ret;
-            }
-            inline iterator end() {
-                iterator ret;
-                auto s = &primary_levels[0];
-                std::memcpy(&ret.node, &s, sizeof(this));
-                return ret;
-            }
         };
 
         //FIFO buffer. Multi-thread outbound, multi-thread inbound safety. Reentrancy safe. 
@@ -622,14 +327,14 @@ namespace io
             inline void resume() {
                 coro.resume();
             }
-            inline ~awaitable() {}
-            inline awaitable() {
+            inline ~awaitable() {
                 assert(coro == nullptr || !"Awaitable ERROR: resource leak detected.");
             }
+            inline awaitable() {}
             awaitable(const awaitable&) = delete;
             awaitable& operator =(const awaitable&) = delete;
             awaitable(awaitable&&) = default;
-            inline awaitable& operator =(awaitable&& right) {
+            inline awaitable& operator =(awaitable&& right) noexcept {
                 coro = right.coro;
                 right.coro = nullptr;
                 return *this;
@@ -695,10 +400,35 @@ namespace io
             inline bool isSet() {
                 return awaiter->bit_set & awaiter->set_lock;
             }
+            enum class status_t{
+                null = 0,
+                idle = 1,
+                pedning = 2,
+                fullfilled = 3,
+                rejected = 4
+            };
+            inline status_t status() {
+                if (awaiter)
+                {
+                    if (isSet())
+                    {
+                        if (getErr())
+                            return status_t::rejected;
+                        return status_t::fullfilled;
+                    }
+                    else if (awaiter->coro)
+                    {
+                        return status_t::pedning;
+                    }
+                    return status_t::idle;
+                }
+                return status_t::null;
+            }
             inline void invalidate() {
                 decons();
                 awaiter = nullptr;
             }
+            promise<void> getPromise();
         private:
             future(clock&&) = delete;
             lowlevel::awaiter* awaiter = nullptr;
@@ -716,6 +446,7 @@ namespace io
             future_with& operator =(const future_with&) = delete;
             future_with(future_with&&) = delete;
             future_with& operator =(future_with&&) = delete;
+            promise<T> getPromise();
         };
 
         //awaitable promise type
@@ -723,7 +454,7 @@ namespace io
         template <typename T = void>
         struct promise : lowlevel::promise_base {
             __IO_INTERNAL_HEADER_PERMISSION
-            inline promise(promise &&right) : lowlevel::promise_base(static_cast<lowlevel::promise_base &&>(right)), ptr(right.ptr) {
+            inline promise(promise &&right) noexcept : lowlevel::promise_base(static_cast<lowlevel::promise_base &&>(right)), ptr(right.ptr) {
                 right.ptr = nullptr;
                 right.awaiter = nullptr;
             }
@@ -736,8 +467,8 @@ namespace io
                 return *this;
             }
             inline promise() {}
-            //the pointer got from function resolve() will be invalid next co_await.
-            // gets nullptr when promise invalid.
+            // the pointer got from function resolve() will be invalid next co_await.
+            //  gets nullptr when the promise is invalid.
             inline T* resolve() {
                 if (static_cast<lowlevel::promise_base*>(this)->resolve())
                     return ptr;
@@ -778,12 +509,108 @@ namespace io
             }
             clock(clock&&) = default;
             inline clock() {}
+            bool set();
+            bool set_later();
         private:
             void decons() noexcept;
         };
 
-        //Repeatly Timer
-        struct timer{};
+        // Repeatly Timer and Counter
+        // Not thread safe
+        //struct timer
+        //{
+        //    enum mode_t
+        //    {
+        //        still_mode = 0,
+        //        counter,
+        //        up_timer,               //use normal future
+        //        down_timer,
+        //        down_timer_compensated  //use clock
+        //    };
+        //    inline timer(
+        //        mode_t mode,
+        //        std::chrono::steady_clock::duration interval,
+        //        size_t _stop_count = 0,
+        //        size_t _count = 0) {
+        //        assert(mode != still_mode || !"timer ERROR: invaild construct mode");
+        //        this->reset(mode, interval, _stop_count, _count);
+        //    }
+        //    inline void reset(
+        //        mode_t mode = still_mode,
+        //        std::chrono::steady_clock::duration interval = std::chrono::seconds(0),
+        //        size_t _stop_count = 0,
+        //        size_t _count = 0);
+        //    inline mode_t getMode() { return _mode; }
+        //    // Use only for a count-up timer. Count and calculate the duration between the previous lap() time point and now.
+        //    template <typename T_fsm>
+        //    inline std::chrono::steady_clock::duration lap(fsm<T_fsm>& _fsm) {
+        //        assert(mode == up_timer || !"timer ERROR: invaild construct mode");
+        //        auto now = std::chrono::steady_clock::now();
+        //        auto time = now - _previous;
+        //        _previous = now;
+        //        count(_fsm);
+        //        return time;
+        //    }
+        //    template <typename T_fsm>
+        //    inline bool count(fsm<T_fsm>& _fsm) {
+        //        if (count_num <= stop_count)
+        //        {
+        //            count_num++;
+        //            if (this->_mode == counter ||
+        //                this->_mode == up_timer)
+        //                when_count_future2.getPromise().resolve();
+        //            else
+        //            {
+        //                when_count_future.set();
+        //                _fsm.make_clock(when_count_future)
+        //            }
+        //            if (count_num == stop_count)
+        //            {
+        //                when_stop_future.getPromise().resolve();
+        //            }
+        //        }
+        //        else
+        //        {
+        //            return false;
+        //        }
+        //        return true;
+        //    }
+        //    template <typename T_fsm>
+        //    inline void start(fsm<T_fsm>& _fsm, bool isResolve = false) {
+        //        if (this->_mode == counter ||
+        //            this->_mode == up_timer)
+        //            _fsm.make_future(when_count_future2);
+        //        else
+        //        {
+        //            assert(this->_interval != std::chrono::seconds(0) || !"reset ERROR: invalid null interval");
+        //            _fsm.make_clock(when_count_future, this->_interval);
+        //        }
+        //        _fsm.make_future(when_stop_future);
+        //    }
+        //    inline void stop() {
+        //        when_stop_future.getPromise().resolve();
+        //    }
+        //    inline io::future& when_count() {
+        //        if (this->_mode == counter ||
+        //            this->_mode == up_timer)
+        //            return when_count_future2;
+        //        else
+        //            return when_count_future;
+        //    }
+        //    inline io::future& when_stop() {
+        //        return when_stop_future;
+        //    }
+        //
+        //    size_t count_num;
+        //    size_t stop_count;
+        //private:
+        //    mode_t _mode;
+        //    std::chrono::steady_clock::time_point _previous;
+        //    std::chrono::steady_clock::duration _interval;
+        //    clock when_count_future;
+        //    future when_count_future2;
+        //    future when_stop_future;
+        //};
 
         //awaitable future receiver type
         // Not Thread safe.
@@ -1398,8 +1225,14 @@ namespace io
         struct get_fsm_t {};
         inline static constexpr get_fsm_t get_fsm;
 
-        struct ready_t {};
-        inline static constexpr ready_t ready;
+        template<typename>
+        struct is_future_with : std::false_type {};
+
+        template<typename U>
+        struct is_future_with<io::future_with<U>> : std::true_type {};
+
+        template<typename T>
+        struct is_future { static constexpr bool value = (io::is_future_with<T>::value || std::is_same_v<T, io::future>); };
 
         // finite-state machine function literally return type
         template <typename T>
@@ -1459,6 +1292,18 @@ namespace io
                         erased_handle = h;
                         this->_fsm.mngr->delay_deconstruct.push(erased_handle);
                     }
+                    if constexpr (io::is_future<T>::value)
+                    {
+                        if (_fsm._data.awaiter)
+                        {
+                            auto awaiter = _fsm._data.awaiter;
+                            if ((awaiter->occupy_lock & awaiter->bit_set) == false)
+                            {
+                                awaiter->bit_set |= awaiter->occupy_lock;
+                                awaiter->set();
+                            }
+                        }
+                    }
                 }
                 fsm<T> _fsm;
             };
@@ -1511,7 +1356,7 @@ namespace io
         struct fsm_handle {
             __IO_INTERNAL_HEADER_PERMISSION;
             inline fsm_handle() {}
-            inline fsm_handle(fsm_handle<T>&& fsm_) :_fsm(fsm_._fsm) {
+            inline fsm_handle(fsm_handle<T>&& fsm_) noexcept :_fsm(fsm_._fsm) {
                 fsm_._fsm = nullptr;
             }
             fsm_handle(const fsm_handle&) = delete;
@@ -1565,6 +1410,72 @@ namespace io
             }
             inline fsm_handle(fsm_func<T>::promise_type* fsm_) :_fsm(fsm_) {}
             fsm_func<T>::promise_type* _fsm = nullptr;
+        };
+
+        //io::future_fsm_func<T> == io::fsm_func<io::future_with<T>>
+        // When the coroutine begins, the future will be initialized automately.
+        // When co_return, resolve(null) the future.
+        template <typename T>
+        using future_fsm_func = io::fsm_func<io::future_with<T>>;
+
+        using future_fsm_func_ = io::fsm_func<io::future>;
+
+        template <typename T>
+        using future_fsm_handle = io::fsm_handle<io::future_with<T>>;
+
+        using future_fsm_handle_ = io::fsm_handle<io::future>;
+
+        //io::dispatcher<T> == std::deque<io::fsm_handle<T>>
+        // a simple dispatcher of coroutines.
+        template <typename T>
+            requires requires (const T a, const T b) { { a == b } -> std::convertible_to<bool>; }
+        struct dispatcher {
+            inline void insert(io::fsm_handle<T>&& handle) {
+                _deque.emplace_back(std::move(handle));
+            }
+
+            inline void clear() {
+                return _deque.clear();
+            }
+
+            inline void remove_vacancy() {
+                auto it = _deque.begin();
+                while (it != _deque.end()) {
+                    if (it->done()) {
+                        it = _deque.erase(it);
+                        continue;
+                    }
+                };
+            }
+
+            inline size_t size() {
+                return _deque.size();
+            }
+
+            inline io::fsm_handle<T>* find(const T& key) {
+                io::fsm_handle<T>* result = nullptr;
+
+                auto it = _deque.begin();
+                while (it != _deque.end()) {
+                    if (it->done()) {
+                        it = _deque.erase(it);
+                        continue;
+                    }
+
+                    if (!result && key == *it) {
+                        result = &(*it);
+                    }
+                    ++it;
+                }
+
+                if (!result) {
+                    return nullptr;
+                }
+                return result;
+            }
+
+        private:
+            std::deque<io::fsm_handle<T>> _deque;
         };
 
         //scheduler, executor
@@ -1658,7 +1569,7 @@ namespace io
                     break;
                 }
 
-                //over time tasks
+                //clocks
                 std::chrono::steady_clock::time_point suspend_next;
                 auto suspend_max_p = suspend_max + std::chrono::steady_clock::now();
                 while (1)
@@ -1715,6 +1626,15 @@ namespace io
                 pendingTask.push(erased_handle);
                 spinLock_pd.clear(std::memory_order_release);
                 this->suspend_sem.release();
+
+                if constexpr (io::is_future_with<T_spawn>::value)
+                {
+                    this->make_future(new_fsm._data->_fsm._data, &new_fsm._data->_fsm._data.data);
+                }
+                else if constexpr (io::is_future<T_spawn>::value)
+                {
+                    this->make_future(new_fsm._data->_fsm._data);
+                }
 
                 return { new_fsm._data };
             }
@@ -1835,22 +1755,26 @@ namespace io
                 inline socket() {}
 
                 template <typename T_FSM>
-                inline async_future wait_read(fsm<T_FSM>& state_machine, size_t size = BUF_SIZE) {
-                    async_future fut;
-                    async_promise prom = state_machine.make_future(fut);
-                    recv_buf->resize(size);
-                    asio_sock.async_read_some(asio::buffer(recv_buf->data(), recv_buf->size()),
-                        [
-                            pr = std::move(prom),
-                                recv_buf = this->recv_buf
-                        ](const asio::error_code& ec, size_t size)mutable {
-                            recv_buf->resize(size);
-                            if (ec)
-                                pr.reject(ec);
-                            else
-                                pr.resolve();
-                        });
-                    return fut;
+                inline async_future& wait_read(fsm<T_FSM>& state_machine, size_t size = BUF_SIZE) {
+                    auto status = recv_future.status();
+                    if (status == io::future::status_t::null ||
+                        status == io::future::status_t::fullfilled ||
+                        status == io::future::status_t::rejected)
+                    {
+                        async_promise prom = state_machine.make_future(recv_future);
+                        recv_buf->resize(size);
+                        asio_sock.async_read_some(asio::buffer(recv_buf->data(), recv_buf->size()),
+                                                  [pr = std::move(prom),
+                                                   recv_buf = this->recv_buf](const asio::error_code &ec, size_t size) mutable
+                                                  {
+                                                      recv_buf->resize(size);
+                                                      if (ec)
+                                                          pr.reject(ec);
+                                                      else
+                                                          pr.resolve();
+                                                  });
+                    }
+                    return recv_future;
                 }
 
                 inline std::span<char> read() {
@@ -1859,6 +1783,8 @@ namespace io
 
                 template <typename T_FSM>
                 inline async_future wait_send(fsm<T_FSM>& state_machine, std::span<const char> span) {
+                    if (send_buf.use_count() != 1)
+                        send_buf = std::make_shared<std::string>();
                     async_future fut;
                     async_promise prom = state_machine.make_future(fut);
                     send_buf->resize(span.size());
@@ -1896,6 +1822,11 @@ namespace io
                     asio_sock.close(ec);
                 }
 
+                inline auto readGetErr()
+                {
+                    return recv_future.getErr();
+                }
+
                 IO_MANAGER_FORWARD_FUNC(asio_sock, native_handle);
                 IO_MANAGER_FORWARD_FUNC(asio_sock, is_open);
                 IO_MANAGER_FORWARD_FUNC(asio_sock, remote_endpoint);
@@ -1912,6 +1843,7 @@ namespace io
                 static constexpr size_t BUF_SIZE = 10240;
                 std::shared_ptr<std::string> recv_buf = std::make_shared<std::string>();
                 std::shared_ptr<std::string> send_buf = std::make_shared<std::string>();
+                io::async_future recv_future;
             };
 
             struct acceptor {
@@ -1943,17 +1875,11 @@ namespace io
                                 {
                                     accptr->ptr.emplace(std::move(sock));
                                     pr.resolve();
+                                    return;
                                 }
                             }
                             pr.reject(ec);
                         });
-                    //asio_accp.async_wait(asio::ip::tcp::acceptor::wait_read,
-                    //    [pr = std::move(prom)](const asio::error_code& ec)mutable {
-                    //        if (ec)
-                    //            pr.reject(ec);
-                    //        else
-                    //            pr.resolve();
-                    //    });
                     return fut;
                 }
 
@@ -2002,28 +1928,37 @@ namespace io
                 }
 
                 template <typename T_FSM>
-                inline async_future wait_read(fsm<T_FSM>& state_machine, size_t size = BUF_SIZE) {
-                    async_future fut;
-                    async_promise prom = state_machine.make_future(fut);
+                inline async_future& wait_read(fsm<T_FSM>& state_machine, size_t size = BUF_SIZE)
+                {
+                    auto status = recv_future.status();
+                    if (status == io::future::status_t::null ||
+                        status == io::future::status_t::fullfilled||
+                        status == io::future::status_t::rejected)
+                    {
+                        async_promise prom = state_machine.make_future(recv_future);
 
-                    if (size > recv_buf->buf.size()) {
-                        recv_buf->buf.resize(size);
+                        if (size > recv_buf->buf.size())
+                        {
+                            recv_buf->buf.resize(size);
+                        }
+
+                        asio_sock.async_receive_from(
+                            asio::buffer(recv_buf->buf.data(), size),
+                            recv_buf->endpoint,
+                            [pr = std::move(prom), recv_buf = this->recv_buf](const asio::error_code &ec, size_t bytes_received) mutable
+                            {
+                                if (ec)
+                                {
+                                    pr.reject(ec);
+                                }
+                                else
+                                {
+                                    recv_buf->buf.resize(bytes_received);
+                                    pr.resolve();
+                                }
+                            });
                     }
-
-                    asio_sock.async_receive_from(
-                        asio::buffer(recv_buf->buf.data(), size),
-                        recv_buf->endpoint,
-                        [pr = std::move(prom), recv_buf = this->recv_buf]
-                        (const asio::error_code& ec, size_t bytes_received) mutable {
-                            if (ec) {
-                                pr.reject(ec);
-                            }
-                            else {
-                                recv_buf->buf.resize(bytes_received);
-                                pr.resolve();
-                            }
-                        });
-                    return fut;
+                    return recv_future;
                 }
 
                 inline std::tuple<std::span<const char>, asio::ip::udp::endpoint> read() const {
@@ -2034,6 +1969,8 @@ namespace io
                 inline async_future wait_send(fsm<T_FSM>& state_machine,
                     std::span<const char> data,
                     const asio::ip::udp::endpoint& target) {
+                    if (send_buf.use_count() != 1)
+                        send_buf = std::make_shared<data_with_endpoint>();
                     async_future fut;
                     async_promise prom = state_machine.make_future(fut);
 
@@ -2065,6 +2002,10 @@ namespace io
                     asio_sock.close(ec);
                 }
 
+                inline auto readGetErr() {
+                    return recv_future.getErr();
+                }
+
                 IO_MANAGER_FORWARD_FUNC(asio_sock, open);
                 IO_MANAGER_FORWARD_FUNC(asio_sock, bind);
                 IO_MANAGER_FORWARD_FUNC(asio_sock, is_open);
@@ -2080,6 +2021,7 @@ namespace io
                 };
                 std::shared_ptr<data_with_endpoint> recv_buf = std::make_shared<data_with_endpoint>();
                 std::shared_ptr<data_with_endpoint> send_buf = std::make_shared<data_with_endpoint>();
+                io::async_future recv_future;
             };
         };
 
