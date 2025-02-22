@@ -1032,7 +1032,7 @@ namespace io
                 inline void erase_invalid() {
                     if (waiting.size() == 0)
                         return;
-                    for (auto iter = waiting.begin(); ; iter++)
+                    for (auto iter = waiting.begin(); iter != waiting.end(); iter++)
                     {
                         auto& [prom, is_copy] = *iter;
                         if (prom.valid() == false)
