@@ -294,27 +294,29 @@ inline bool io::clock::set_later() {
 
 
 //async_promise
-inline void io::async_promise::decons() noexcept {
-    if (this->awaiter) {
-        awaiter->queue_in(&this->awaiter->mngr->prom_decons_queue);
+inline void io::async_promise::decons(lowlevel::awaiter* exchange_ptr) noexcept {
+    lowlevel::awaiter* old_value = awaiter.exchange(exchange_ptr);
+    if (old_value) {
+        old_value->queue_in(&old_value->mngr->prom_decons_queue);
     }
 }
-inline bool io::async_promise::resolve() {
-    if (this->awaiter)
-    {
-        auto temp = awaiter;
-        awaiter = nullptr;
+inline bool io::async_promise::resolve()
+{
+    lowlevel::awaiter* temp = nullptr;
+    this->awaiter.exchange(temp);
+    if (temp) {
         temp->queue_in(&temp->mngr->resolve_queue);
         return true;
     }
     return false;
 }
-inline bool io::async_promise::reject(std::error_code ec) {
-    if (this->awaiter) {
-        this->awaiter->no_tm.err = ec;
-        auto temp = awaiter;
-        awaiter = nullptr;
-        temp->queue_in(&temp->mngr->reject_queue);
+inline bool io::async_promise::reject(std::error_code ec)
+{
+    lowlevel::awaiter* temp = nullptr;
+    this->awaiter.exchange(temp);
+    if (temp) {
+        temp->no_tm.err = ec;
+        temp->queue_in(&temp->mngr->resolve_queue);
         return true;
     }
     return false;

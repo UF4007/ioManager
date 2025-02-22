@@ -621,14 +621,13 @@ namespace io
         // Thread safe.
         struct async_promise {
             __IO_INTERNAL_HEADER_PERMISSION
-            async_promise(const async_promise&) = delete;
+                async_promise(const async_promise&) = delete;
             async_promise& operator=(const async_promise&) = delete;
-            inline async_promise(async_promise&& right) noexcept :awaiter(right.awaiter) {
+            inline async_promise(async_promise&& right) noexcept :awaiter(right.awaiter.load()) {
                 right.awaiter = nullptr;
             }
             inline async_promise& operator=(async_promise&& right) noexcept {
-                decons();
-                this->awaiter = right.awaiter;
+                decons(right.awaiter.load());
                 right.awaiter = nullptr;
                 return *this;
             }
@@ -639,8 +638,8 @@ namespace io
                 decons();
             }
         private:
-            lowlevel::awaiter* awaiter = nullptr;
-            void decons() noexcept;
+            std::atomic<lowlevel::awaiter*> awaiter = nullptr;
+            void decons(lowlevel::awaiter* exchange_ptr = nullptr) noexcept;
         };
 
         //single manager(thread) internal channel
@@ -1429,7 +1428,6 @@ namespace io
         //io::dispatcher<T> == std::deque<io::fsm_handle<T>>
         // a simple dispatcher of coroutines.
         template <typename T>
-            requires requires (const T a, const T b) { { a == b } -> std::convertible_to<bool>; }
         struct dispatcher {
             inline void insert(io::fsm_handle<T>&& handle) {
                 _deque.emplace_back(std::move(handle));
@@ -1453,7 +1451,8 @@ namespace io
                 return _deque.size();
             }
 
-            inline io::fsm_handle<T>* find(const T& key) {
+            template <typename U>
+            inline io::fsm_handle<T>* find(const U& key) requires requires (const T& a, const U& b) { { a == b } -> std::convertible_to<bool>; } {
                 io::fsm_handle<T>* result = nullptr;
 
                 auto it = _deque.begin();
