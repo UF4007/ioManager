@@ -300,20 +300,16 @@ inline void io::async_promise::decons(lowlevel::awaiter* exchange_ptr) noexcept 
         old_value->queue_in(&old_value->mngr->prom_decons_queue);
     }
 }
-inline bool io::async_promise::resolve()
-{
-    lowlevel::awaiter* temp = nullptr;
-    this->awaiter.exchange(temp);
+inline bool io::async_promise::resolve() {
+    lowlevel::awaiter* temp = this->awaiter.exchange(nullptr);
     if (temp) {
         temp->queue_in(&temp->mngr->resolve_queue);
         return true;
     }
     return false;
 }
-inline bool io::async_promise::reject(std::error_code ec)
-{
-    lowlevel::awaiter* temp = nullptr;
-    this->awaiter.exchange(temp);
+inline bool io::async_promise::reject(std::error_code ec) {
+    lowlevel::awaiter* temp = this->awaiter.exchange(nullptr);
     if (temp) {
         temp->no_tm.err = ec;
         temp->queue_in(&temp->mngr->resolve_queue);
