@@ -1429,6 +1429,20 @@ namespace io
         // a simple dispatcher of coroutines.
         template <typename T>
         struct dispatcher {
+            using iterator = std::deque<io::fsm_handle<T>>::iterator;
+
+            inline iterator end() { return _deque.end(); }
+
+            inline iterator begin() { return _deque.begin(); }
+
+            inline iterator erase(iterator iter) { return _deque.erase(iter); }
+
+            inline iterator erase(iterator begin, iterator end) { return _deque.erase(begin, end); }
+
+            inline void insert_before(io::fsm_handle<T>&& handle, iterator iter) {
+                _deque.insert(iter, std::move(handle));
+            }
+
             inline void insert(io::fsm_handle<T>&& handle) {
                 _deque.emplace_back(std::move(handle));
             }
@@ -1452,8 +1466,8 @@ namespace io
             }
 
             template <typename U>
-            inline io::fsm_handle<T>* find(const U& key) requires requires (const T& a, const U& b) { { a == b } -> std::convertible_to<bool>; } {
-                io::fsm_handle<T>* result = nullptr;
+            inline iterator find(const U& key) requires requires (const T& a, const U& b) { { a == b } -> std::convertible_to<bool>; } {
+                iterator result = this->end();
 
                 auto it = _deque.begin();
                 while (it != _deque.end()) {
@@ -1462,15 +1476,12 @@ namespace io
                         continue;
                     }
 
-                    if (!result && key == *it->data()) {
-                        result = &(*it);
+                    if (result == this->end() && key == *it->data()) {
+                        result = it;
                     }
                     ++it;
                 }
 
-                if (!result) {
-                    return nullptr;
-                }
                 return result;
             }
 
