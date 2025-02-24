@@ -623,12 +623,9 @@ namespace io
             __IO_INTERNAL_HEADER_PERMISSION
                 async_promise(const async_promise&) = delete;
             async_promise& operator=(const async_promise&) = delete;
-            inline async_promise(async_promise&& right) noexcept :awaiter(right.awaiter.load()) {
-                right.awaiter = nullptr;
-            }
+            inline async_promise(async_promise&& right) noexcept :awaiter(right.awaiter.exchange(nullptr)) {}
             inline async_promise& operator=(async_promise&& right) noexcept {
-                decons(right.awaiter.load());
-                right.awaiter = nullptr;
+                decons(right.awaiter.exchange(nullptr));
                 return *this;
             }
             inline async_promise() {}
@@ -1038,9 +1035,9 @@ namespace io
                         if (prom.valid() == false)
                         {
                             iter = waiting.erase(iter);
+                            if (iter == waiting.end())
+                                break;
                         }
-                        if (iter == waiting.end())
-                            break;
                     }
                 }
                 inline std::span<T> get_in(size_t size) {
@@ -2038,6 +2035,91 @@ namespace io
 
         namespace dns {
 #include "protocol/dns.h"
+        };
+
+        namespace kcp {
+            namespace detail {
+                using output = int(*)(const char* buf, int len, ikcpcb* kcp, void* user);
+#include "protocol/ikcp.c"
+            };
+            //protocol control block
+            struct pcb {
+                using lowlevel_output = int(*)(const char* buf, int len, void* kcp, void* user);
+                template<typename T_FSM>
+                inline pcb(fsm<T_FSM>& fsm_user) {
+                    _kcp = detail::ikcp_create(0, nullptr);
+                    _fsm = fsm_user.spawn_now([](detail::ikcpcb* _kcp)->fsm_func<fsm_builtin> {
+                        auto& fsm_user = co_await io::get_fsm;
+                        io::clock delayer;
+                        while (1)
+                        {
+                            detail::ikcp_update(_kcp,
+                                std::chrono::steady_clock::now().time_since_epoch().count()
+                            );
+                            fsm_user.make_clocker(delayer,
+                                std::chrono::milliseconds(
+                                    detail::ikcp_check(_kcp,
+                                        std::chrono::steady_clock::now().time_since_epoch().count()
+                                    )
+                                )
+                            );
+                            co_await delayer;
+                        }
+                        }(_kcp));
+                }
+                inline pcb(pcb&& right) noexcept :_kcp(right._kcp), _fsm(std::move(right._fsm)) {}
+                pcb& operator=(pcb&& right) noexcept {
+                    if (this != &right) {
+                        if (_kcp) {
+                            detail::ikcp_release(_kcp);
+                        }
+                        _kcp = right._kcp;
+                        right._kcp = nullptr;
+                        _fsm = std::move(right._fsm);
+                    }
+                    return *this;
+                }
+                inline ~pcb() {
+                    if (_kcp)
+                        detail::ikcp_release(_kcp);
+                }
+                inline int send(const char* buffer, int len) { return detail::ikcp_send(_kcp, buffer, len); }
+                template <typename T_FSM>
+                inline future& future_recv(fsm<T_FSM>& state_machine) {
+                    auto status = recv_future.status();
+                    if (status == io::future::status_t::null ||
+                        status == io::future::status_t::fullfilled ||
+                        status == io::future::status_t::rejected)
+                    {
+                        state_machine.make_future(recv_future);
+                    }
+                    return recv_future;
+                }
+                inline int recv(char* buffer, int len) { return detail::ikcp_recv(_kcp, buffer, len); }
+                inline void setoutput(lowlevel_output output) { return detail::ikcp_setoutput(_kcp, (detail::output)output); }
+                inline int input(const char* buffer, long len) { 
+                    int ret = detail::ikcp_input(_kcp, buffer, len);
+                    if (detail::ikcp_peeksize(_kcp) > 0)
+                    {
+                        recv_future.getPromise().resolve();
+                    }
+                    return ret;
+                }
+                inline void flush() { detail::ikcp_flush(_kcp); }
+                inline int peeksize() const { return detail::ikcp_peeksize(_kcp); }
+                inline int setmtu(int mtu) { return detail::ikcp_setmtu(_kcp, mtu); }
+                inline int wndsize(int sndwnd, int rcvwnd) { return detail::ikcp_wndsize(_kcp, sndwnd, rcvwnd); }
+                inline int waitsnd() const { return detail::ikcp_waitsnd(_kcp); }
+                inline int nodelay(int nodelay_enable, int interval, int resend, int nc) { return detail::ikcp_nodelay(_kcp, nodelay_enable, interval, resend, nc); }
+                template<typename... Args>
+                inline void log(int mask, const char* fmt, Args... args) { detail::ikcp_log(_kcp, mask, fmt, args...); }
+                IO_MANAGER_BAN_COPY(pcb);
+            private:
+                struct fsm_builtin {};
+                detail::ikcpcb* _kcp = nullptr;
+                fsm_handle<fsm_builtin> _fsm;
+                future recv_future;
+            };
         };
 
         namespace http {
