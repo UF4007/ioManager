@@ -203,7 +203,7 @@ inline int ikcp_output(ikcpcb *kcp, const void *data, int size)
 		ikcp_log(kcp, IKCP_LOG_OUTPUT, "[RO] %ld bytes", (long)size);
 	}
 	if (size == 0) return 0;
-	return kcp->output((const char*)data, size, kcp, kcp->user);
+	return kcp->output(std::span<const char>((const char*)data, size));
 }
 
 // output queue
@@ -282,7 +282,7 @@ inline ikcpcb* ikcp_create(IUINT32 conv, void *user)
 	kcp->nocwnd = 0;
 	kcp->xmit = 0;
 	kcp->dead_link = IKCP_DEADLINK;
-	kcp->output = NULL;
+	new (&kcp->output) std::function<int(std::span<const char>)>();
 	kcp->writelog = NULL;
 
 	return kcp;
@@ -331,6 +331,7 @@ inline void ikcp_release(ikcpcb *kcp)
 		kcp->ackcount = 0;
 		kcp->buffer = NULL;
 		kcp->acklist = NULL;
+		kcp->output = nullptr;
 		ikcp_free(kcp);
 	}
 }
@@ -339,8 +340,7 @@ inline void ikcp_release(ikcpcb *kcp)
 //---------------------------------------------------------------------
 // set output callback, which will be invoked by kcp
 //---------------------------------------------------------------------
-inline void ikcp_setoutput(ikcpcb *kcp, int (*output)(const char *buf, int len,
-	ikcpcb *kcp, void *user))
+inline void ikcp_setoutput(ikcpcb *kcp, std::function<int(std::span<const char>)> output)
 {
 	kcp->output = output;
 }

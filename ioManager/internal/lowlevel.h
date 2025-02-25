@@ -34,6 +34,7 @@ class lowlevel {
         inline ~awaiter() {}
         inline void reset() {
             bit_set = initilaze;
+            this->no_tm.err = std::error_code();
         };
         inline void set() {
             this->bit_set |= set_lock;

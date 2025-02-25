@@ -2039,12 +2039,11 @@ namespace io
 
         namespace kcp {
             namespace detail {
-                using output = int(*)(const char* buf, int len, ikcpcb* kcp, void* user);
 #include "protocol/ikcp.c"
             };
             //protocol control block
             struct pcb {
-                using lowlevel_output = int(*)(const char* buf, int len, void* kcp, void* user);
+                using lowlevel_output = std::function<int(std::span<const char>)>;
                 template<typename T_FSM>
                 inline pcb(fsm<T_FSM>& fsm_user) {
                     _kcp = detail::ikcp_create(0, nullptr);
@@ -2053,16 +2052,12 @@ namespace io
                         io::clock delayer;
                         while (1)
                         {
-                            detail::ikcp_update(_kcp,
-                                std::chrono::steady_clock::now().time_since_epoch().count()
-                            );
-                            fsm_user.make_clocker(delayer,
-                                std::chrono::milliseconds(
-                                    detail::ikcp_check(_kcp,
-                                        std::chrono::steady_clock::now().time_since_epoch().count()
-                                    )
-                                )
-                            );
+                            auto now = std::chrono::system_clock::now();
+                            auto duration = now.time_since_epoch();
+                            uint32_t timestamp = (uint32_t)std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+                            detail::ikcp_update(_kcp, timestamp);
+                            uint32_t delay_time = detail::ikcp_check(_kcp, timestamp) - timestamp;
+                            fsm_user.make_clock(delayer, std::chrono::milliseconds(delay_time));
                             co_await delayer;
                         }
                         }(_kcp));
@@ -2095,16 +2090,18 @@ namespace io
                     }
                     return recv_future;
                 }
+                inline auto readGetErr() { return recv_future.getErr(); }
                 inline int recv(char* buffer, int len) { return detail::ikcp_recv(_kcp, buffer, len); }
-                inline void setoutput(lowlevel_output output) { return detail::ikcp_setoutput(_kcp, (detail::output)output); }
+                inline void setoutput(lowlevel_output output) { return detail::ikcp_setoutput(_kcp, output); }
                 inline int input(const char* buffer, long len) { 
                     int ret = detail::ikcp_input(_kcp, buffer, len);
                     if (detail::ikcp_peeksize(_kcp) > 0)
                     {
-                        recv_future.getPromise().resolve();
+                        recv_future.getPromise().resolve_later();
                     }
                     return ret;
                 }
+                inline void input_err(std::error_code ec) { recv_future.getPromise().reject_later(ec); }
                 inline void flush() { detail::ikcp_flush(_kcp); }
                 inline int peeksize() const { return detail::ikcp_peeksize(_kcp); }
                 inline int setmtu(int mtu) { return detail::ikcp_setmtu(_kcp, mtu); }

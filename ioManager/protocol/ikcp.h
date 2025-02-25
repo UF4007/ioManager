@@ -308,7 +308,7 @@ struct IKCPCB
 	int fastlimit;
 	int nocwnd, stream;
 	int logmask;
-	int (*output)(const char *buf, int len, struct IKCPCB *kcp, void *user);
+	std::function<int(std::span<const char>)> output;
 	void (*writelog)(const char *log, struct IKCPCB *kcp, void *user);
 };
 
