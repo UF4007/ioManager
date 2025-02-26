@@ -24,3 +24,5 @@
 ### Close to the speed of native C++ coroutines, more than 100M coroutines per second switch speed is supported in a single thread.
 
 ### JS style future/promise all/any/race/allSettle, golang style chan/async_chan provided. Multi-thread lock-free structure provided. RAII friendly.
+
+Header-only. `#include "ioManager/ioManager.h"` to use.
