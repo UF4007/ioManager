@@ -8,7 +8,7 @@ io::fsm_func<io::awaitable> coro_demo(int initial)
     if (initial)
     {
         task_handle = fsm.getManager()->spawn_later(coro_demo(initial - 1));
-        co_await *task_handle.data();
+        co_await *task_handle;
         std::cout << initial << std::endl;
     }
     if (fsm->operator bool())
@@ -139,7 +139,7 @@ io::fsm_func<void> coro_benchmark()
                 io::future future;
                 while(1)
                 {
-                    *fsm.data() = fsm.make_future(future);
+                    *fsm = fsm.make_future(future);
                     co_await future;
                 } }()));
     }

@@ -16,7 +16,7 @@
 namespace io
 {
     //headonly version distinguish, prevent the linker from mixing differental versions when multi-reference.
-    inline namespace v247a {
+    inline namespace v3 {
 
 #include "internal/forwardDeclarations.h"
         enum class err : uint8_t {
@@ -437,6 +437,7 @@ namespace io
 
         //future with data.
         template<typename T>
+            requires (!std::is_same_v<T, void>)
         struct future_with : future {
             T data;
             inline future_with() {}
@@ -1238,6 +1239,8 @@ namespace io
             struct get_fsm_awaitable;
             struct promise_type {
                 inline fsm_func<T> get_return_object() { return { this }; }
+                template<typename U>
+                get_fsm_awaitable await_transform(future_with<U>&&) = delete;
                 inline get_fsm_awaitable await_transform(get_fsm_t x) {
                     return get_fsm_awaitable{};
                 }
@@ -1332,6 +1335,7 @@ namespace io
             __IO_INTERNAL_HEADER_PERMISSION;
             inline T* data() { return &_data; }
             inline T* operator->() { return &_data; }
+            inline typename std::add_lvalue_reference<T>::type operator*() { return _data; }
         private:
             fsm() = default;
             T _data;
@@ -1382,6 +1386,7 @@ namespace io
             // UB: Try get data when a fsm had been detached.
             inline T* data() requires (!std::is_same_v<T, void>) { return &_fsm->_fsm._data; }
             inline T* operator->() requires (!std::is_same_v<T, void>) { return &_fsm->_fsm._data; }
+            inline typename std::add_lvalue_reference<T>::type operator*() requires (!std::is_same_v<T, void>) { return _fsm->_fsm._data; }
             inline void destroy() { this->decons(); _fsm = nullptr; }
             inline operator bool() {
                 return _fsm;

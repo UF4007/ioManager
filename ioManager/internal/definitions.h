@@ -208,6 +208,7 @@ inline io::promise<void> io::future::getPromise() {
 }
 //future with
 template<typename T>
+    requires (!std::is_same_v<T, void>)
 inline io::promise<T> io::future_with<T>::getPromise() {
     if (awaiter)
     {
