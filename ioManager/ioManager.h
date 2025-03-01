@@ -391,6 +391,10 @@ namespace io
                 right.awaiter = nullptr;
                 return *this;
             }
+            template <typename U>
+            future(future_with<U>&&) = delete;
+            template <typename U>
+            void operator=(future_with<U>&&) = delete;
             inline ~future() noexcept {
                 decons();
             }

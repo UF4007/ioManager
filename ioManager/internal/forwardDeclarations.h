@@ -23,6 +23,9 @@ template <typename T>struct hive;
 template <typename T>struct skip_table;
 template <typename T, size_t capacity> struct forward_fifo;
 template <typename _Struc> class dualbuf;
+template<typename T>
+	requires (!std::is_same_v<T, void>)
+struct future_with;
 struct awaitable;
 struct future;
 struct clock;
