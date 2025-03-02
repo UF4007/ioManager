@@ -19,7 +19,7 @@
 	</a>
 </div>
 
-# ioManager
+# io::manager Pipeline Concurrency
 
 ### Close to the speed of native C++ coroutines, more than 100M coroutines per second switch speed is supported in a single thread.
 
