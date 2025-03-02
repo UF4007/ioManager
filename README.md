@@ -21,8 +21,10 @@
 
 # io::manager Pipeline Concurrency
 
-### Close to the speed of native C++ coroutines, more than 100M coroutines per second switch speed is supported in a single thread.
+### future->fsm->protocol->pipeline
 
 ### JS style future/promise all/any/race/allSettle, golang style chan/async_chan provided. Multi-thread lock-free structure provided. RAII friendly.
+
+### Close to the speed of native C++ coroutines, more than 100M coroutines per second switch speed is supported in a single thread.
 
 Header-only. `#include "ioManager/ioManager.h"` to use.
