@@ -66,7 +66,7 @@ io::fsm_func<void> coro_chan(size_t *count)
                 io::chan<char>::span_guard recv;        //zero copy span guard object.
                 co_await(chan >> recv);
                 if (count)
-                    *count += 10240;
+                    *count += recv.span.size();
                 else
                     std::cout << recv.span.data() << std::endl;
             } }(chan, count));
@@ -76,7 +76,7 @@ io::fsm_func<void> coro_chan(size_t *count)
         handle = fsm.spawn_now([](io::chan_r<char> ch, size_t *count) -> io::fsm_func<void>
                                {
             std::string str;
-            str.resize(10240);
+            str.resize(1024 * 10);
             io::fsm<void>& fsm = co_await io::get_fsm;
             while (1)
             {
@@ -84,7 +84,7 @@ io::fsm_func<void> coro_chan(size_t *count)
                 ch.get_and_copy(std::span<char>(str), futur);
                 co_await futur;
                 if (count)
-                    *count += 10240;
+                    *count += str.size();
                 else
                     std::cout << str << std::endl;
             } }(chan, count));

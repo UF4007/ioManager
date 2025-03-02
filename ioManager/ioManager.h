@@ -1,7 +1,7 @@
 /* C++20 coroutine scheduler, protocol, RPC lib.
  * ------Head-Only------
  * 
- * A clear data protocol stream processing solution is provided.
+ * Pipeline Concurrency, a clear data protocol stream processing solution is provided.
  * 
  * using asio for network support.
  * 
@@ -1420,7 +1420,7 @@ namespace io
 
         //io::future_fsm_func<T> == io::fsm_func<io::future_with<T>>
         // When the coroutine begins, the future will be initialized automately.
-        // When co_return, resolve(null) the future.
+        // When co_return, if the future is pending, try to resolve the future.
         template <typename T>
         using future_fsm_func = io::fsm_func<io::future_with<T>>;
 
@@ -1760,6 +1760,31 @@ namespace io
             std::binary_semaphore suspend_sem = std::binary_semaphore(1);
 
             io::hive<lowlevel::awaiter> awaiter_hive = io::hive<lowlevel::awaiter>(1000);
+        };
+
+        template <typename ...Args>
+        struct pipeline_constructor {
+        };
+
+        template <typename ...Args>
+        struct pipeline {
+        };
+
+        template <typename Front, typename Rear, typename ...Adaptors>
+        struct pipeline_base {
+        };
+
+        template <typename FSM_Index = void, typename FSM_In = void, typename FSM_Out = void>
+        struct rpc {
+
+        };
+
+        //hepler struct of rpc
+        template <>
+        struct rpc<void, void, void> {
+            rpc() = delete;
+            //default struct of rpc
+            struct def {};
         };
 
 
@@ -2130,10 +2155,6 @@ namespace io
 
         namespace http {
 #include "protocol/http.h"
-        };
-
-        namespace rpc {
-
         };
 
         // software simulated protocol, the same as below

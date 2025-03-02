@@ -371,6 +371,7 @@ class lowlevel {
         std::array<lowlevel::awaiter*, sizeof...(Args)> il;
     };
 
+
     inline static asio::io_context& asioManager = *([] {
         asio::io_context* ptr;
         std::atomic<bool> sem = 0;
