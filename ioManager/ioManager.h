@@ -522,100 +522,109 @@ namespace io
 
         // Repeatly Timer and Counter
         // Not thread safe
-        //struct timer
-        //{
-        //    enum mode_t
-        //    {
-        //        still_mode = 0,
-        //        counter,
-        //        up_timer,               //use normal future
-        //        down_timer,
-        //        down_timer_compensated  //use clock
-        //    };
-        //    inline timer(
-        //        mode_t mode,
-        //        std::chrono::steady_clock::duration interval,
-        //        size_t _stop_count = 0,
-        //        size_t _count = 0) {
-        //        assert(mode != still_mode || !"timer ERROR: invaild construct mode");
-        //        this->reset(mode, interval, _stop_count, _count);
-        //    }
-        //    inline void reset(
-        //        mode_t mode = still_mode,
-        //        std::chrono::steady_clock::duration interval = std::chrono::seconds(0),
-        //        size_t _stop_count = 0,
-        //        size_t _count = 0);
-        //    inline mode_t getMode() { return _mode; }
-        //    // Use only for a count-up timer. Count and calculate the duration between the previous lap() time point and now.
-        //    template <typename T_fsm>
-        //    inline std::chrono::steady_clock::duration lap(fsm<T_fsm>& _fsm) {
-        //        assert(mode == up_timer || !"timer ERROR: invaild construct mode");
-        //        auto now = std::chrono::steady_clock::now();
-        //        auto time = now - _previous;
-        //        _previous = now;
-        //        count(_fsm);
-        //        return time;
-        //    }
-        //    template <typename T_fsm>
-        //    inline bool count(fsm<T_fsm>& _fsm) {
-        //        if (count_num <= stop_count)
-        //        {
-        //            count_num++;
-        //            if (this->_mode == counter ||
-        //                this->_mode == up_timer)
-        //                when_count_future2.getPromise().resolve();
-        //            else
-        //            {
-        //                when_count_future.set();
-        //                _fsm.make_clock(when_count_future)
-        //            }
-        //            if (count_num == stop_count)
-        //            {
-        //                when_stop_future.getPromise().resolve();
-        //            }
-        //        }
-        //        else
-        //        {
-        //            return false;
-        //        }
-        //        return true;
-        //    }
-        //    template <typename T_fsm>
-        //    inline void start(fsm<T_fsm>& _fsm, bool isResolve = false) {
-        //        if (this->_mode == counter ||
-        //            this->_mode == up_timer)
-        //            _fsm.make_future(when_count_future2);
-        //        else
-        //        {
-        //            assert(this->_interval != std::chrono::seconds(0) || !"reset ERROR: invalid null interval");
-        //            _fsm.make_clock(when_count_future, this->_interval);
-        //        }
-        //        _fsm.make_future(when_stop_future);
-        //    }
-        //    inline void stop() {
-        //        when_stop_future.getPromise().resolve();
-        //    }
-        //    inline io::future& when_count() {
-        //        if (this->_mode == counter ||
-        //            this->_mode == up_timer)
-        //            return when_count_future2;
-        //        else
-        //            return when_count_future;
-        //    }
-        //    inline io::future& when_stop() {
-        //        return when_stop_future;
-        //    }
-        //
-        //    size_t count_num;
-        //    size_t stop_count;
-        //private:
-        //    mode_t _mode;
-        //    std::chrono::steady_clock::time_point _previous;
-        //    std::chrono::steady_clock::duration _interval;
-        //    clock when_count_future;
-        //    future when_count_future2;
-        //    future when_stop_future;
-        //};
+        namespace timer {
+            struct counter {
+                size_t stop_count;
+                size_t count_sum = 0;
+                inline counter(size_t stop_count) :stop_count(stop_count) {}
+                inline bool count(size_t count_ = 1) {
+                    if (count_sum >= stop_count) {
+                        return false;
+                    }
+                    count_sum += count_;
+                    if (count_sum >= stop_count) {
+                        _on_stop.getPromise().resolve();
+                    }
+                    return true;
+                }
+                inline bool stop() {
+                    if (count_sum >= stop_count) {
+                        return false;
+                    }
+                    count_sum = stop_count;
+                    //_on_stop.getPromise().resolve();
+                    return true;
+                }
+                inline void reset(size_t count_sum_ = 0) {
+                    count_sum = count_sum_;
+                }
+                inline bool isReach() {
+                    return count_sum >= stop_count;
+                }
+                template <typename T_FSM>
+                inline future& onReach(T_FSM& _fsm)
+                {
+                    _fsm.make_future(_on_stop);
+                    return _on_stop;
+                }
+            private:
+                future _on_stop;
+            };
+            // compensated countdown timer, when it being await, current time will be compared with (start_timepoint + count_sum * count_duration), rather (previous_timepoint + count_duration)
+            struct down : private counter {
+                inline down(size_t stop_count) : counter(stop_count) {}
+                inline void start(std::chrono::steady_clock::duration _duration)
+                {
+                    this->reset();
+                    duration = _duration;
+                    return;
+                }
+                template <typename T_FSM>
+                inline clock& await_tm(T_FSM& _fsm)
+                {
+                    auto target_time = start_tp + duration * (this->count_sum + 1);
+                    auto now = std::chrono::steady_clock::now();
+
+                    bool reached = this->count() == false;
+                    if (now >= target_time || reached) {
+                        _fsm.make_outdated_clock(_clock);
+                    }
+                    else {
+                        auto wait_duration = target_time - now;
+                        _fsm.make_clock(_clock, wait_duration);
+                    }
+                    return _clock;
+                }
+                inline void reset(size_t count_sum_ = 0)
+                {
+                    counter::reset(count_sum_);
+                    start_tp = std::chrono::steady_clock::now();
+                }
+                inline std::chrono::steady_clock::duration getDuration() const
+                {
+                    return duration;
+                }
+                inline bool isReach() {
+                    return ((counter*)this)->isReach();
+                }
+                template <typename T_FSM>
+                inline future& onReach(T_FSM& _fsm)
+                {
+                    return ((counter*)this)->onReach(_fsm);
+                }
+            private:
+                std::chrono::steady_clock::time_point start_tp;
+                std::chrono::steady_clock::duration duration;
+                clock _clock;
+            };
+            // forward timer
+            struct up {
+                inline void start() { previous_tp = std::chrono::steady_clock::now(); }
+                inline std::chrono::steady_clock::duration lap() {
+                    auto now = std::chrono::steady_clock::now();
+                    auto previous = previous_tp;
+                    previous_tp = now;
+                    if (previous_tp.time_since_epoch().count() == 0)
+                        return std::chrono::steady_clock::duration{ 0 };
+                    return now - previous;
+                }
+                inline void reset() {
+                    previous_tp = {};
+                }
+            private:
+                std::chrono::steady_clock::time_point previous_tp;
+            };
+        };
 
         //awaitable future receiver type
         // Not Thread safe.
@@ -1682,6 +1691,15 @@ namespace io
                         static_cast<lowlevel::awaiter*>(fut.awaiter)
                     )
                 );
+            }
+            inline void make_outdated_clock(clock& fut, bool isResolve = false)
+            {
+                fut.decons();
+                FutureVaild(fut);
+                fut.awaiter->bit_set |= fut.awaiter->set_lock;
+                fut.awaiter->bit_set |= fut.awaiter->is_clock;
+                if (isResolve)
+                    fut.awaiter->bit_set |= fut.awaiter->clock_resolve;
             }
             // make async future pair
             inline async_promise make_future(async_future& fut)

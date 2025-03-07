@@ -50,6 +50,10 @@ inline void io::lowlevel::fsm_base::make_clock(clock &fut, T_Duration duration, 
 {
     this->mngr->make_clock(fut, duration, isResolve);
 }
+inline void io::lowlevel::fsm_base::make_outdated_clock(clock& fut, bool isResolve)
+{
+    this->mngr->make_outdated_clock(fut, isResolve);
+}
 inline io::async_promise io::lowlevel::fsm_base::make_future(async_future &fut)
 {
     return this->mngr->make_future(fut);

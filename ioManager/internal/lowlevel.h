@@ -118,7 +118,12 @@ class lowlevel {
         template <typename T_Duration>
         void make_clock(clock &fut, T_Duration duration, bool isResolve = false);
         template <typename T_Duration>
-        void setTimeout(clock &fut, T_Duration duration, bool isResolve = false) { make_clock(fut, duration, isResolve); }
+        clock setTimeout(T_Duration duration, bool isResolve = false) {
+            clock fut;
+            make_clock(fut, duration, isResolve);
+            return fut;
+        }
+        inline void make_outdated_clock(clock& fut, bool isResolve = false);
         // make async future pair
         async_promise make_future(async_future &fut);
         template <typename T_chan>

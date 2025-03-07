@@ -4,7 +4,6 @@
 																	friend struct io::future;\
 																	template <typename T2>requires (!std::is_same_v<T2, void>)friend struct io::future_with;\
 																	friend struct io::clock;\
-																	friend struct io::timer;\
 																	template <typename T2>friend struct io::promise;\
 																	friend struct io::async_future;\
 																	friend struct io::async_promise;\
@@ -30,7 +29,6 @@ struct future_with;
 struct awaitable;
 struct future;
 struct clock;
-struct timer;
 template <typename T>struct promise;
 struct async_future;
 struct async_promise;

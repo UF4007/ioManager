@@ -127,7 +127,8 @@ io::fsm_func<void> coro_benchmark()
     io::fsm<void> &fsm = co_await io::get_fsm;
     std::vector<io::fsm_handle<io::promise<>>> test_coros;
 
-    auto start_coro = std::chrono::high_resolution_clock::now();
+    io::timer::up timer;
+    timer.start();
 
     // prepare for coroutine loop
     for (size_t i = 0; i < NUM_COROS; i++)
@@ -144,7 +145,7 @@ io::fsm_func<void> coro_benchmark()
                 } }()));
     }
 
-    auto start_loop = std::chrono::high_resolution_clock::now();
+    auto duration_coro = std::chrono::duration_cast<std::chrono::microseconds>(timer.lap());
 
     // start loop
     for (size_t i = 0; i < TOTAL_SWITCHES; i++)
@@ -153,9 +154,7 @@ io::fsm_func<void> coro_benchmark()
         test_coros[ind]->resolve();
     }
 
-    auto end = std::chrono::high_resolution_clock::now();
-    auto duration_coro = std::chrono::duration_cast<std::chrono::microseconds>(start_loop - start_coro);
-    auto duration_loop = std::chrono::duration_cast<std::chrono::microseconds>(end - start_loop);
+    auto duration_loop = std::chrono::duration_cast<std::chrono::microseconds>(timer.lap());
     double creates_per_sec = NUM_COROS * 1000000.0 / duration_coro.count();
     double switches_per_sec = TOTAL_SWITCHES * 1000000.0 / duration_loop.count();
 
@@ -320,6 +319,18 @@ io::fsm_func<void> coro_udp_echo()
     }
 }
 
+io::fsm_func<void> coro_down_timer() {
+    auto& fsm = co_await io::get_fsm;
+    io::timer::down timer(10);
+    timer.start(std::chrono::seconds(1));
+    while (timer.isReach() == false)
+    {
+        std::cout << "tick" << std::endl;
+        co_await timer.await_tm(fsm);
+    }
+    std::cout << "end" << std::endl;
+}
+
 void io_testmain_v3()
 {
     io::manager mngr;
@@ -360,6 +371,10 @@ void io_testmain_v3()
     // udp echo
     if (false)
         mngr.spawn_later(coro_udp_echo()).detach();
+
+    // compensated timer test
+    if (false)
+        mngr.spawn_later(coro_down_timer()).detach();
 
     while (1)
     {
