@@ -1696,6 +1696,7 @@ namespace io
             {
                 fut.decons();
                 FutureVaild(fut);
+                fut.awaiter->bit_set &= ~fut.awaiter->promise_handled;
                 fut.awaiter->bit_set |= fut.awaiter->set_lock;
                 fut.awaiter->bit_set |= fut.awaiter->is_clock;
                 if (isResolve)
