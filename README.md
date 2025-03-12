@@ -441,141 +441,77 @@ io::fsm_func<void> async_operation()
 }
 ```
 
-### Future-Returning Coroutines
+> **Important:** 
+> - Unlike regular promise/future, `async_promise` is thread-safe and can be safely used across threads.
+> - The same one-time use rule applies: after resolution or rejection, both async_future and async_promise become invalid.
 
-io::manager provides a special mechanism for coroutines that represent asynchronous operations and can be awaited directly.
+### Coroutines with Future Return Type
+
+io::manager provides a special mechanism for coroutines that directly return futures. Using `io::fsm_func<io::future>` (or its alias `io::future_fsm_func_`), you can create coroutines that automatically manage future resolution:
 
 ```cpp
-// A coroutine that performs an asynchronous operation
-io::fsm_func<void> async_operation_impl()
+// A coroutine that returns a future
+io::fsm_func<io::future> async_task()
 {
-    io::fsm<void> &fsm = co_await io::get_fsm;
+    io::fsm<io::future> &fsm = co_await io::get_fsm;
     
-    // Perform some asynchronous work
+    // The future is automatically created and associated with the FSM
+    
+    // Simulate some asynchronous work
     co_await fsm.setTimeout(std::chrono::seconds(1));
     
+    // The future is automatically resolved when the coroutine completes
+    // No explicit resolve() call is needed
     co_return;
 }
 
-// Using spawn_now to create and await an asynchronous operation
-io::fsm_func<void> use_async_operation()
+// For futures with data, use io::fsm_func<io::future_with<T>> or its alias io::future_fsm_func<T>
+io::future_fsm_func<std::string> async_data_task()
 {
-    io::fsm<void> &fsm = co_await io::get_fsm;
+    io::fsm<io::future_with<std::string>> &fsm = co_await io::get_fsm;
     
-    // Create a future
-    io::future fut;
-    io::promise<void> prom = fsm.make_future(fut);
-    
-    // Spawn the async operation and attach the promise
-    fsm.spawn_now([prom = std::move(prom)]() -> io::fsm_func<void> {
-        io::fsm<void> &fsm = co_await io::get_fsm;
-        
-        // Perform some asynchronous work
-        co_await fsm.setTimeout(std::chrono::seconds(1));
-        
-        // Resolve the promise when done
-        prom.resolve();
-        
-        co_return;
-    }()).detach();
-    
-    // Wait for the operation to complete
-    co_await fut;
-    
-    co_return;
-}
-
-// For returning data with a future
-io::fsm_func<void> async_data_operation_impl(std::string& result)
-{
-    io::fsm<void> &fsm = co_await io::get_fsm;
-    
-    // Perform some asynchronous work
+    // Simulate work
     co_await fsm.setTimeout(std::chrono::milliseconds(500));
     
-    // Set the data to be returned
-    result = "Operation completed successfully";
+    // Set the data directly in the future
+    fsm->data = "Result from async task";
     
+    // The future_with is automatically resolved with the data
     co_return;
 }
 
-// Using spawn_now to create and await an asynchronous operation that returns data
-io::fsm_func<void> use_async_data_operation()
-{
-    io::fsm<void> &fsm = co_await io::get_fsm;
-    
-    // Create a future with data
-    io::future_with<std::string> data_result;
-    io::promise<std::string> prom = fsm.make_future(data_result, &data_result.data);
-    
-    // Spawn the async operation and attach the promise
-    fsm.spawn_now([prom = std::move(prom)]() -> io::fsm_func<void> {
-        io::fsm<void> &fsm = co_await io::get_fsm;
-        
-        // Perform some asynchronous work
-        co_await fsm.setTimeout(std::chrono::milliseconds(500));
-        
-        // Set the data to be returned
-        *prom.data() = "Operation completed successfully";
-        
-        // Resolve the promise when done
-        prom.resolve();
-        
-        co_return;
-    }()).detach();
-    
-    // Wait for the operation to complete
-    co_await data_result;
-    
-    std::cout << "Result: " << data_result.data << std::endl;
-    
-    co_return;
-}
-
-// Using future-returning coroutines
+// Using the future-returning coroutines
 io::fsm_func<void> use_future_coroutines()
 {
     io::fsm<void> &fsm = co_await io::get_fsm;
     
-    // Create a future
-    io::future result;
-    io::promise<void> prom1 = fsm.make_future(result);
+    // Spawn the future-returning coroutine and get a handle
+    io::future_fsm_handle_ task_handle = fsm.spawn_now(async_task());
     
-    // Spawn the async operation
-    fsm.spawn_now([prom = std::move(prom1)]() -> io::fsm_func<void> {
-        io::fsm<void> &fsm = co_await io::get_fsm;
-        co_await fsm.setTimeout(std::chrono::seconds(1));
-        prom.resolve();
-        co_return;
-    }()).detach();
+    // Await the handle to get the future result
+    co_await *task_handle;
     
-    // Wait for the result
-    co_await result;
+    // For coroutines with data
+    io::future_fsm_handle<std::string> data_task_handle = fsm.spawn_now(async_data_task());
     
-    // Create a future with data
-    io::future_with<std::string> data_result;
-    io::promise<std::string> prom2 = fsm.make_future(data_result, &data_result.data);
+    // Await the handle
+    co_await *data_task_handle;
     
-    // Spawn the async data operation
-    fsm.spawn_now([prom = std::move(prom2)]() -> io::fsm_func<void> {
-        io::fsm<void> &fsm = co_await io::get_fsm;
-        co_await fsm.setTimeout(std::chrono::milliseconds(500));
-        *prom.data() = "Operation completed successfully";
-        prom.resolve();
-        co_return;
-    }()).detach();
-    
-    // Wait for the data result
-    co_await data_result;
-    
-    std::cout << "Result: " << data_result.data << std::endl;
+    // Access the data from the handle
+    std::cout << "Received: " << data_task_handle->data << std::endl;
     
     co_return;
 }
+```
 
-> **Important:** 
-> - Unlike regular promise/future, `async_promise` is thread-safe and can be safely used across threads.
-> - The same one-time use rule applies: after resolution or rejection, both async_future and async_promise become invalid.
+Key benefits of this approach:
+
+1. **Automatic Future Management**: The future is automatically created and associated with the coroutine.
+2. **Implicit Resolution**: The future is automatically resolved when the coroutine completes.
+3. **Error Propagation**: If the coroutine encounters an error, the future is automatically rejected.
+4. **Composability**: Future-returning coroutines can be easily composed using handles.
+
+> **Note:** When using `io::fsm_func<io::future>` or `io::future_fsm_func<T>`, you spawn the coroutine with `spawn_now` and get a handle. You then await the handle using `co_await *handle`. The framework handles the future creation and resolution automatically, making your asynchronous code cleaner and less error-prone.
 
 ## Performance
 
