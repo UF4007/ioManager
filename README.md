@@ -56,6 +56,11 @@ io::manager is a header-only library. Simply include the main header file in you
 
 The future/promise pattern in io::manager provides a powerful way for coroutines to communicate and synchronize with each other. This pattern is similar to JavaScript's Promise system but optimized for C++ coroutines.
 
+> **Important Notes:**
+> - future/promise pairs are one-time use only. After resolution or rejection, both future and promise are reset and must be reconstructed for reuse.
+> - For data-carrying futures , the data's lifetime must exceed the future's lifetime.
+> - If a future is destructed before its corresponding promise, the promise will not be able to access any data pointers from the future side. It guarantees the memory-safeness of future/promise mechanisms.
+
 ### Creating and Using Future/Promise Pairs
 
 #### Basic Usage
@@ -102,40 +107,29 @@ io::fsm_func<void> consumer_coroutine(io::future fut)
 }
 ```
 
+> **Note:** After `prom.resolve()` is called, both the future and promise become invalid for await operations. To reuse them, you need to create a new future/promise pair.
+
 #### Passing Data with Future/Promise
 
 To pass data from one coroutine to another:
 
 ```cpp
-// Producer coroutine
-io::fsm_func<void> data_producer()
+// Consumer coroutine (initiates the communication)
+io::fsm_func<void> data_consumer()
 {
+    // Get the FSM context
     io::fsm<void> &fsm = co_await io::get_fsm;
     
-    // Create a future_with that can carry data
+    // Consumer creates the future_with that will hold the data
     io::future_with<std::string> fut;
     
-    // Create a promise that will modify the future's data
+    // Create a promise that will be passed to the producer
     io::promise<std::string> prom = fsm.make_future(fut, &fut.data);
     
-    // Spawn a consumer and pass the future to it
-    // Note: We need to create a new future_with since it can't be moved
-    io::future_with<std::string> fut_copy = fut;
-    fsm.spawn_now(data_consumer(std::move(fut_copy))).detach();
+    // Spawn a producer and pass the promise to it
+    fsm.spawn_now(data_producer(std::move(prom))).detach();
     
-    // Set the data and resolve the promise
-    *prom.data() = "Hello from producer!";
-    prom.resolve();
-    
-    co_return;
-}
-
-// Consumer coroutine
-io::fsm_func<void> data_consumer(io::future_with<std::string> fut)
-{
-    io::fsm<void> &fsm = co_await io::get_fsm;
-    
-    // Wait for the future to be resolved
+    // Wait for the future to be resolved by the producer
     co_await fut;
     
     // Access the data
@@ -143,7 +137,24 @@ io::fsm_func<void> data_consumer(io::future_with<std::string> fut)
     
     co_return;
 }
+
+// Producer coroutine
+io::fsm_func<void> data_producer(io::promise<std::string> prom)
+{
+    // Get the FSM context
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    
+    // Set the data and resolve the promise
+    *prom.data() = "Hello from producer!";
+    prom.resolve();
+    
+    co_return;
+}
 ```
+
+> **Important:** 
+> - The data in fsm.make_future(fut, &data) must have a lifetime longer than the future itself. The `future_with<T>` struct helps you to manage it.
+> - If the future is destructed before the promise, `prom.data()` will return a null pointer.
 
 ### Error Handling
 
@@ -205,9 +216,6 @@ io::fsm_func<void> race_example()
     io::promise<void> prom1 = fsm.make_future(fut1);
     io::promise<void> prom2 = fsm.make_future(fut2);
     
-    // Create a race between futures
-    auto race_result = io::future::race(fut1, fut2);
-    
     // Start two operations in parallel
     fsm.spawn_now([&prom1]() -> io::fsm_func<void> {
         io::fsm<void> &fsm = co_await io::get_fsm;
@@ -226,7 +234,7 @@ io::fsm_func<void> race_example()
     }()).detach();
     
     // Wait for the race result
-    co_await race_result;
+    co_await io::future::race(fut1, fut2);
     
     std::cout << "Race completed!" << std::endl;
     
@@ -265,6 +273,10 @@ io::fsm_func<void> async_operation()
     co_return;
 }
 ```
+
+> **Important:** 
+> - Unlike regular promise/future, `async_promise` is thread-safe and can be safely used across threads.
+> - The same one-time use rule applies: after resolution or rejection, both async_future and async_promise become invalid.
 
 ## Performance
 
