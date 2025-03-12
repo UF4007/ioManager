@@ -47,12 +47,12 @@ io::manager provides a comprehensive solution for building efficient, concurrent
 ## Table of Contents
 
 - [Finite State Machine (FSM): The Core of io::manager](#finite-state-machine-fsm-the-core-of-iomanager)
+  - [Creating a Manager](#creating-a-manager)
   - [Creating a Basic FSM Coroutine](#creating-a-basic-fsm-coroutine)
   - [Spawning and Managing Coroutines](#spawning-and-managing-coroutines)
   - [Using Delays](#using-delays)
   - [FSM with Associated Values](#fsm-with-associated-values)
   - [Managing Coroutine Lifetime](#managing-coroutine-lifetime)
-  - [Creating a Manager](#creating-a-manager)
 - [Future/Promise: Coroutine Communication](#futurepromise-coroutine-communication)
   - [Creating and Using Future/Promise Pairs](#creating-and-using-futurepromise-pairs)
   - [Error Handling](#error-handling)
@@ -70,7 +70,7 @@ io::manager provides a comprehensive solution for building efficient, concurrent
 ## Requirements and Installation
 
 - C++20 compatible compiler
-- Supported platforms: Windows, Linux, ESP
+- Supported platforms: Windows, Linux
 
 io::manager is a header-only library. Simply include the main header file in your project:
 
@@ -81,6 +81,24 @@ io::manager is a header-only library. Simply include the main header file in you
 ## Finite State Machine (FSM): The Core of io::manager
 
 At the heart of io::manager is its Finite State Machine (FSM) implementation, which provides the foundation for creating and managing coroutines. Understanding how to create and use FSMs is essential before diving into more advanced features.
+
+### Creating a Manager
+
+a io::manager == a thread
+
+```cpp
+io::manager mgr;
+int main() {
+    mgr.spawn_later(parent_coroutine()).detach();
+    
+    // Drive the manager (process coroutines)
+    while (true) {
+        mgr.drive();
+    }
+    
+    return 0;
+}
+```
 
 ### Creating a Basic FSM Coroutine
 
@@ -220,34 +238,9 @@ io::fsm_func<void> lifetime_example()
 > - Detached coroutines continue running until they complete or the manager is destroyed.
 > - The FSM context (`io::fsm<T>`) is only valid within the coroutine that obtained it.
 
-### Creating a Manager
-
-a io::manager == a thread
-
-```cpp
-io::manager mgr;
-int main() {
-    mgr.spawn_later(parent_coroutine()).detach();
-    
-    // Drive the manager (process coroutines)
-    while (true) {
-        mgr.drive();
-    }
-    
-    return 0;
-}
-```
-
-The `drive()` method processes pending coroutines, resolves futures, and handles timers. It's typically called in a loop until all work is complete.
-
 ## Future/Promise: Coroutine Communication
 
 The future/promise pattern in io::manager provides a powerful way for coroutines to communicate and synchronize with each other. This pattern is similar to JavaScript's Promise system but optimized for C++ coroutines.
-
-> **Important Notes:**
-> - future/promise pairs are one-time use only. After resolution or rejection, both future and promise are reset and must be reconstructed for reuse.
-> - For data-carrying futures , the data's lifetime must exceed the future's lifetime.
-> - If a future is destructed before its corresponding promise, the promise will not be able to access any data pointers from the future side. It guarantees the memory-safeness of future/promise mechanisms.
 
 ### Creating and Using Future/Promise Pairs
 
@@ -295,7 +288,7 @@ io::fsm_func<void> consumer_coroutine(io::future fut)
 }
 ```
 
-> **Note:** After `prom.resolve()` is called, both the future and promise become invalid for await operations. To reuse them, you need to create a new future/promise pair.
+> **Note:** After `prom.resolve()` is called, the promise become invalid and the future cannot be used for await operations. Must be reconstructed for reuse.
 
 #### Passing Data with Future/Promise
 
@@ -342,7 +335,7 @@ io::fsm_func<void> data_producer(io::promise<std::string> prom)
 
 > **Important:** 
 > - The data in fsm.make_future(fut, &data) must have a lifetime longer than the future itself. The `future_with<T>` struct helps you to manage it.
-> - If the future is destructed before the promise, `prom.data()` will return a null pointer.
+> - If the future is destructed before the promise, `prom.data()` will return a null pointer. It guarantees the memory-safeness of future/promise mechanisms.
 
 ### Error Handling
 

@@ -30,7 +30,7 @@
 
 # io::manager - 管线化并发
 
-- **管线化并发**：通过清晰的协议流方法实现高效的数据流处理
+- **管线化并发**：将协议组装成自动收发数据的管线
 - **Future/Promise**：JavaScript风格的future/promise，支持all/any/race/allSettle操作
 - **chan**：Go语言风格的chan和async_chan，用于协程间通信、线程间通信
 - **RAII友好**：资源管理遵循RAII原则，确保安全性和可靠性
@@ -39,33 +39,51 @@
 ## 目录
 
 - [有限状态机(FSM)：协程函数](#有限状态机(FSM)：协程函数)
+  - [创建管理器](#创建管理器)
   - [创建基本的FSM协程](#创建基本的fsm协程)
   - [生成和管理协程](#生成和管理协程)
   - [使用延迟](#使用延迟)
   - [带关联值的FSM](#带关联值的fsm)
   - [管理协程生命周期](#管理协程生命周期)
-  - [创建管理器](#创建管理器)
 - [Future/Promise：协程通信](#futurepromise协程通信)
   - [创建和使用Future/Promise对](#创建和使用futurepromise对)
   - [错误处理](#错误处理)
   - [组合多个Future](#组合多个future)
   - [多线程：async_future/async_promise](#多线程：async_future/async_promise)
   - [带Future返回类型的协程](#带future返回类型的协程)
-- [协议和管道](#协议和管道)
+- [协议和管线](#协议和管线)
   - [协议Concept](#协议Concept)
-  - [管道机制](#管道机制)
+  - [管线机制](#管线机制)
 - [性能](#性能)
 
 ## 使用
 
 - 支持C++20的编译器
-- 支持的平台：Windows、Linux、ESP
+- 支持的平台：Windows、Linux
 
 ```cpp
 #include "ioManager/ioManager.h"
 ```
 
 ## 有限状态机(FSM)：协程函数
+
+### 创建管理器
+
+一个管理器 == 一个线程
+
+```cpp
+io::manager mgr;
+int main() {
+    mgr.spawn_later(parent_coroutine()).detach();
+    
+    // 驱动管理器（处理协程）
+    while (true) {
+        mgr.drive();
+    }
+    
+    return 0;
+}
+```
 
 ### 创建基本的FSM协程
 
@@ -109,7 +127,7 @@ io::fsm_func<void> parent_coroutine()
 - `spawn_now`：立即启动协程
 - `getManager()->spawn_later`：将协程排队等待稍后执行
 
-### 延迟
+### 延时
 
 ```cpp
 io::fsm_func<void> timer_example()
@@ -201,32 +219,9 @@ io::fsm_func<void> lifetime_example()
 > - 分离的协程会继续运行，直到它们完成或管理器被销毁。
 > - FSM上下文（`io::fsm<T>`）仅在获取它的协程内有效。
 
-### 创建管理器
-
-一个管理器 == 一个线程
-
-```cpp
-io::manager mgr;
-int main() {
-    mgr.spawn_later(parent_coroutine()).detach();
-    
-    // 驱动管理器（处理协程）
-    while (true) {
-        mgr.drive();
-    }
-    
-    return 0;
-}
-```
-
 ## Future/Promise：协程通信
 
 这种模式类似于JavaScript的Promise系统，但针对C++协程进行了优化。
-
-> **重要提示：**
-> - future/promise对是一次性使用的。在resolve 或reject 后，future和promise都会被重置，必须重新构造才能重用。
-> - 对于携带数据的future，数据的生命周期必须超过future的生命周期。
-> - 如果future在其对应的promise之前被销毁，promise将无法访问来自future端的任何数据指针。这保证了future/promise机制的内存安全性。
 
 ### 创建和使用Future/Promise对
 
@@ -274,7 +269,7 @@ io::fsm_func<void> consumer_coroutine(io::future fut)
 }
 ```
 
-> **注意：** 在调用`prom.resolve()`后，future和promise都变为无效，不能再用于await操作。要重用它们，您需要创建一个新的future/promise对。
+> **注意：** future/promise对是一次性的。在调用`prom.resolve()`后，promise将无效，future将不能再用于await操作。必须重新构造才能重用。
 
 #### 使用Future/Promise传递数据
 
@@ -321,11 +316,11 @@ io::fsm_func<void> data_producer(io::promise<std::string> prom)
 
 > **重要提示：** 
 > - fsm.make_future(fut, &data)中的数据必须具有比future本身更长的生命周期。`future_with<T>`结构体可以帮助您管理它。
-> - 如果future在promise之前被销毁，`prom.data()`将返回空指针。
+> - 如果future在promise之前被销毁，`prom.data()`将返回空指针。这保证了future/promise机制的内存安全性。
 
 ### 错误处理
 
-Promise也可以使用错误代码被reject ：
+Promise也可以使用错误代码reject：
 
 ```cpp
 io::fsm_func<void> error_example()
@@ -445,7 +440,7 @@ io::fsm_func<void> async_operation()
 
 ### 带Future返回类型的协程
 
-当FSM内建值为future时，有一种特殊机制：自动构造future，并在返回时resolve：
+当FSM内建值为future时，有一种特殊机制：自动构造此future，并在返回时resolve：
 
 ```cpp
 // 返回future的协程
@@ -502,28 +497,28 @@ io::fsm_func<void> use_future_coroutines()
 }
 ```
 
-## 协议和管道
+## 协议和管线
 
 ### 协议Concept
 
-协议分为两个主要类别，具有特定的子类型：
+协议分为两种：
 
 #### 输出协议（3种类型）
 
 1. **带Future的输出协议**：
    - 定义了非void的`prot_output_type`，指定它产生的数据类型
    - 实现了`operator>>(future_with<prot_output_type>&)`，用于带关联数据的异步数据输出
-   - 允许等待future以接收数据
+   - 通过等待future以接收数据
 
 2. **直接输出协议**：
    - 定义了非void的`prot_output_type`，指定它产生的数据类型
    - 实现了`operator>>(prot_output_type&)`，用于不带future的直接数据输出
-   - 数据直接写入提供的引用，无需任何等待
+   - 数据直接写入引用
 
 3. **Void类型Future输出协议**：
    - 将`prot_output_type`定义为`void`
    - 实现了`operator>>(future&)`，用于不带数据的完成信号
-   - 当只需要完成通知而不需要数据传输时使用
+   - 当只需要完成通知，不需要数据传输时使用
 
 #### 输入协议（2种类型）
 
@@ -535,7 +530,7 @@ io::fsm_func<void> use_future_coroutines()
 2. **直接输入协议**：
    - 定义了`prot_input_type`，指定它接受的数据类型
    - 实现了返回`void`的`operator<<(const prot_input_type&)`
-   - 操作同步完成
+   - 操作能够立刻完成
 
 #### 协议接口
 
@@ -563,24 +558,24 @@ struct my_protocol {
 };
 ```
 
-### 管道机制
+### 管线机制
 
-管道其实就是把所有协议组成一个个出-入对（管道段），并且统一在某个协程中等待它们的future。
+管线其实就是把所有协议组成一个个出-入对（管线段），并且统一在某个协程中等待它们的future。
 
-1. **独立触发**：管道的每个段可以独立触发，并搬运数据，而不依赖前面或后面的段。
+1. **独立触发**：管线的每个段可以独立触发，并搬运数据，而不依赖前面或后面的段。
 
-2. **方向性**：数据在管道段中从输出协议流向输入协议，方向单一。
+2. **方向性**：数据在管线段中从输出协议流向输入协议，方向单一。
 
-在管道中：
+在管线中：
 - 第一个协议必须是输出协议
 - 最后一个协议必须是输入协议
 - 中间协议必须同时实现两个接口（双向协议）
 - 适配器可用于在不兼容的协议之间转换数据
-- 两个直接协议（直接输出协议和直接输入协议）不能在管道中直接连接
+- 两个直接协议（直接输出协议和直接输入协议）不能在管线中直接连接
 
-#### 创建管道
+#### 创建管线
 
-使用`>>`操作符将协议链接在一起创建管道：
+使用`>>`操作符将协议链接在一起创建管线：
 
 ```cpp
 auto pipeline = io::pipeline<>() >> output_protocol >> middle_protocol >> input_protocol;
@@ -594,23 +589,23 @@ auto pipeline = io::pipeline<>() >> output_protocol >> middle_protocol >> input_
 auto pipeline = io::pipeline<>() >> protocol1 >> 
     [](const Protocol1OutputType& data) -> std::optional<Protocol2InputType> {
         // 将数据从protocol1的输出转换为protocol2的输入
-        // 如果数据应该被跳过，返回std::nullopt
+        // 主动放弃该数据时，返回std::nullopt
         return transformed_data;
     } >> protocol2;
 ```
 
-#### 驱动管道
+#### 驱动管线
 
-创建管道后，可以在协程中使用`<=`操作符和`+`操作符驱动它：
+创建管线后，可以手动在协程中使用`<=`操作符和`+`操作符驱动它：
 
 ```cpp
-// 处理管道一次
+// 处理管线一次
 pipeline <= co_await +pipeline;
 ```
 
-#### 完整管道示例
+#### 完整管线示例
 
-这是一个将数据从TCP套接字传输到UDP套接字并返回的完整管道示例：
+这是一个将数据从TCP套接字传输到UDP套接字并返回的完整管线示例：
 
 ```cpp
 io::fsm_func<void> pipeline_example() {
@@ -630,7 +625,7 @@ io::fsm_func<void> pipeline_example() {
         asio::ip::address::from_string("0.0.0.0"), 8081);
     co_await udp_socket.bind(udp_endpoint);
     
-    // 创建管道：TCP -> UDP -> TCP
+    // 创建管线：TCP -> UDP -> TCP
     auto pipeline = io::pipeline<>() >> tcp_socket >> 
         // 从TCP到UDP的适配器
         [](const std::span<char>& tcp_data) -> std::optional<std::pair<std::span<char>, asio::ip::udp::endpoint>> {
@@ -645,12 +640,12 @@ io::fsm_func<void> pipeline_example() {
             return udp_data.first;
         } >> tcp_socket;
     
-    // 在循环中驱动管道
+    // 在循环中驱动管线
     while (true) {
-        // 等待管道完成一个周期
+        // 等待管线完成一个周期
         pipeline <= co_await +pipeline;
         
-        std::cout << "管道周期完成" << std::endl;
+        std::cout << "管线周期完成" << std::endl;
     }
     
     co_return;
@@ -659,20 +654,11 @@ io::fsm_func<void> pipeline_example() {
 
 ## 性能
 
-io::manager设计为高性能，实现了：
 - 在单线程中每秒超过1亿次协程切换速度
 - 接近原生C++协程性能
 - 通过池化分配实现高效内存使用
 
-## 许可证
-
-本项目采用MIT许可证 - 详见[License.txt](License.txt)文件。
-
-## 贡献
-
-欢迎贡献！请随时在GitHub上开issue或提交pull request。
-
-## 致谢
+## 使用的库
 
 - 使用[Asio](https://think-async.com/Asio/)提供网络支持
 - KCP协议实现基于[ikcp](https://github.com/skywind3000/kcp) 
