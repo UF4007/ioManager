@@ -63,34 +63,37 @@ The future/promise pattern in io::manager provides a powerful way for coroutines
 To create a future/promise pair within a coroutine:
 
 ```cpp
-io::fsm_func<void> example_coroutine()
+// Producer coroutine
+io::fsm_func<void> producer_coroutine()
 {
     // Get the FSM context
     io::fsm<void> &fsm = co_await io::get_fsm;
     
-    // Create a future and its corresponding promise
+    // Create a future that will be returned to the consumer
     io::future fut;
+    
+    // Create a promise that the producer will keep
     io::promise<void> prom = fsm.make_future(fut);
     
-    // Pass the future to another coroutine that will wait on it
-    // Note: future is passed by reference to avoid copying
-    fsm.spawn_now(wait_for_future(std::ref(fut))).detach();
+    // Spawn a consumer coroutine and pass the future to it
+    fsm.spawn_now(consumer_coroutine(std::move(fut))).detach();
     
     // Do some work...
     
-    // Resolve the promise when ready, which will resume the waiting coroutine
+    // Resolve the promise when ready, which will resume the consumer coroutine
     prom.resolve();
     
     co_return;
 }
 
-io::fsm_func<void> wait_for_future(std::reference_wrapper<io::future> fut_ref)
+// Consumer coroutine
+io::fsm_func<void> consumer_coroutine(io::future fut)
 {
     // Get the FSM context
     io::fsm<void> &fsm = co_await io::get_fsm;
     
-    // Wait for the future to be resolved
-    co_await fut_ref.get();
+    // Wait for the future to be resolved by the producer
+    co_await fut;
     
     // Continue execution after the future is resolved
     std::cout << "Future resolved!" << std::endl;
@@ -104,16 +107,21 @@ io::fsm_func<void> wait_for_future(std::reference_wrapper<io::future> fut_ref)
 To pass data from one coroutine to another:
 
 ```cpp
+// Producer coroutine
 io::fsm_func<void> data_producer()
 {
     io::fsm<void> &fsm = co_await io::get_fsm;
     
     // Create a future_with that can carry data
     io::future_with<std::string> fut;
+    
+    // Create a promise that will modify the future's data
     io::promise<std::string> prom = fsm.make_future(fut, &fut.data);
     
-    // Pass the future to a consumer (by reference since future_with cannot be moved)
-    fsm.spawn_now(data_consumer(std::ref(fut))).detach();
+    // Spawn a consumer and pass the future to it
+    // Note: We need to create a new future_with since it can't be moved
+    io::future_with<std::string> fut_copy = fut;
+    fsm.spawn_now(data_consumer(std::move(fut_copy))).detach();
     
     // Set the data and resolve the promise
     *prom.data() = "Hello from producer!";
@@ -122,15 +130,16 @@ io::fsm_func<void> data_producer()
     co_return;
 }
 
-io::fsm_func<void> data_consumer(std::reference_wrapper<io::future_with<std::string>> fut_ref)
+// Consumer coroutine
+io::fsm_func<void> data_consumer(io::future_with<std::string> fut)
 {
     io::fsm<void> &fsm = co_await io::get_fsm;
     
     // Wait for the future to be resolved
-    co_await fut_ref.get();
+    co_await fut;
     
     // Access the data
-    std::cout << "Received: " << fut_ref.get().data << std::endl;
+    std::cout << "Received: " << fut.data << std::endl;
     
     co_return;
 }
@@ -179,63 +188,13 @@ io::fsm_func<void> handle_errors(std::reference_wrapper<io::future> fut_ref)
 
 io::manager provides JavaScript-style combinators for working with multiple futures:
 
-#### all - Wait for all futures to resolve
+#### all - Wait for all futures to resolve or any future to reject
 
-```cpp
-io::fsm_func<void> wait_for_all()
-{
-    io::fsm<void> &fsm = co_await io::get_fsm;
-    
-    io::future fut1, fut2, fut3;
-    io::promise<void> prom1 = fsm.make_future(fut1);
-    io::promise<void> prom2 = fsm.make_future(fut2);
-    io::promise<void> prom3 = fsm.make_future(fut3);
-    
-    // Create a combined future that resolves when all futures resolve
-    auto combined = io::future::all(fut1, fut2, fut3);
-    
-    // Resolve the promises (could be in different coroutines)
-    prom1.resolve();
-    prom2.resolve();
-    prom3.resolve();
-    
-    // Wait for all futures to resolve
-    co_await combined;
-    
-    std::cout << "All futures resolved!" << std::endl;
-    
-    co_return;
-}
-```
-
-#### any - Wait for any future to resolve
-
-```cpp
-io::fsm_func<void> wait_for_any()
-{
-    io::fsm<void> &fsm = co_await io::get_fsm;
-    
-    io::future fut1, fut2, fut3;
-    io::promise<void> prom1 = fsm.make_future(fut1);
-    io::promise<void> prom2 = fsm.make_future(fut2);
-    io::promise<void> prom3 = fsm.make_future(fut3);
-    
-    // Create a combined future that resolves when any future resolves
-    auto combined = io::future::any(fut1, fut2, fut3);
-    
-    // Resolve one promise
-    prom2.resolve();
-    
-    // Wait for any future to resolve
-    co_await combined;
-    
-    std::cout << "At least one future resolved!" << std::endl;
-    
-    co_return;
-}
-```
+#### any - Wait for any future to resolve or all future to reject
 
 #### race - Similar to any, but rejects if any future rejects
+
+#### allSettle - Wait for all futures to be set
 
 ```cpp
 io::fsm_func<void> race_example()
@@ -275,7 +234,7 @@ io::fsm_func<void> race_example()
 }
 ```
 
-### Deferred Resolution with async_future/async_promise
+### Multi-thread Resolution with async_future/async_promise
 
 For operations that may complete asynchronously (especially from other threads), use async_future/async_promise:
 
