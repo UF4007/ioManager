@@ -504,15 +504,6 @@ io::fsm_func<void> use_future_coroutines()
 }
 ```
 
-Key benefits of this approach:
-
-1. **Automatic Future Management**: The future is automatically created and associated with the coroutine.
-2. **Implicit Resolution**: The future is automatically resolved when the coroutine completes.
-3. **Error Propagation**: If the coroutine encounters an error, the future is automatically rejected.
-4. **Composability**: Future-returning coroutines can be easily composed using handles.
-
-> **Note:** When using `io::fsm_func<io::future>` or `io::future_fsm_func<T>`, you spawn the coroutine with `spawn_now` and get a handle. You then await the handle using `co_await *handle`. The framework handles the future creation and resolution automatically, making your asynchronous code cleaner and less error-prone.
-
 ## Performance
 
 io::manager is designed for high performance, achieving:
