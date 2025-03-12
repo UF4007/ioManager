@@ -52,142 +52,260 @@ io::manager is a header-only library. Simply include the main header file in you
 #include "ioManager/ioManager.h"
 ```
 
-## Future/Promise Memory Model
+## Future/Promise: Coroutine Communication
 
-The core of io::manager's asynchronous capabilities is its efficient future/promise implementation. Understanding its memory model is essential for effective usage.
+The future/promise pattern in io::manager provides a powerful way for coroutines to communicate and synchronize with each other. This pattern is similar to JavaScript's Promise system but optimized for C++ coroutines.
 
-### Core Components
+### Creating and Using Future/Promise Pairs
 
-#### Awaiter Structure
-At the heart of the future/promise system is the `lowlevel::awaiter` structure:
-- Maintains state flags in `bit_set` to track the status of future/promise pairs
-- Contains a function pointer `coro` for coroutine resumption
-- Uses a union to store either error codes or timer information
-- Each awaiter is associated with a manager instance
+#### Basic Usage
 
-#### Future and Promise Classes
-- `future` holds a pointer to an `awaiter` object
-- `promise<T>` inherits from `lowlevel::promise_base` and also holds an `awaiter` pointer
-- For data-carrying futures, `future_with<T>` stores data directly within the object
-
-### Memory Management
-
-#### Object Pool Pattern
-To minimize allocation overhead, io::manager uses an object pool to manage awaiter objects:
+To create a future/promise pair within a coroutine:
 
 ```cpp
-// From manager implementation
-auto new_awaiter = this->awaiter_hive.emplace();
-```
-
-The `awaiter_hive` is a type-specific memory pool that efficiently allocates and recycles awaiter objects, avoiding frequent heap allocations and deallocations.
-
-#### Reference Counting Mechanism
-Future/promise pairs use a manual reference counting mechanism:
-- The `bit_set` field in awaiter tracks whether promise and future still reference the awaiter
-- When a future or promise is destroyed, it clears its respective bit
-- When both bits are cleared and no coroutine references exist, the awaiter is returned to the pool
-
-```cpp
-// From future::decons()
-if ((this->awaiter->bit_set & this->awaiter->promise_handled) == false &&
-    this->awaiter->coro == nullptr)
-    this->awaiter->erase_this();
-else
-    this->awaiter->bit_set &= ~this->awaiter->future_handled;
-```
-
-### Lifecycle Management
-
-#### Creation
-Future/promise pairs are created through the manager's `make_future` method:
-
-```cpp
-template <typename T_Prom>
-inline promise<T_Prom> make_future(future& fut, T_Prom* mem_bind)
+io::fsm_func<void> example_coroutine()
 {
-    FutureVaild(fut);
-    return { fut.awaiter, mem_bind };
+    // Get the FSM context
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    
+    // Create a future and its corresponding promise
+    io::future fut;
+    io::promise<void> prom = fsm.make_future(fut);
+    
+    // Pass the future to another coroutine that will wait on it
+    fsm.spawn_now(wait_for_future(fut)).detach();
+    
+    // Do some work...
+    
+    // Resolve the promise when ready, which will resume the waiting coroutine
+    prom.resolve();
+    
+    co_return;
+}
+
+io::fsm_func<void> wait_for_future(io::future fut)
+{
+    // Get the FSM context
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    
+    // Wait for the future to be resolved
+    co_await fut;
+    
+    // Continue execution after the future is resolved
+    std::cout << "Future resolved!" << std::endl;
+    
+    co_return;
 }
 ```
 
-The `FutureVaild` method checks if the future already has an awaiter that can be reused; otherwise, it creates a new one.
+#### Passing Data with Future/Promise
 
-#### Data Binding
-For `future_with<T>`, data is stored directly in the future object, and the promise references this data via pointer:
-
-```cpp
-// From future_with<T>::getPromise()
-return io::promise<T>(awaiter, &this->data);
-```
-
-This design allows the promise to modify the future's data without additional memory allocation.
-
-#### Resolution and Rejection
-Promises can complete futures through `resolve()` or `reject()` methods:
+To pass data from one coroutine to another:
 
 ```cpp
-// From promise_base::resolve()
-awaiter->bit_set |= awaiter->occupy_lock;
-this->awaiter->set();
+io::fsm_func<void> data_producer()
+{
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    
+    // Create a future_with that can carry data
+    io::future_with<std::string> fut;
+    io::promise<std::string> prom = fsm.make_future(fut, &fut.data);
+    
+    // Pass the future to a consumer
+    fsm.spawn_now(data_consumer(std::move(fut))).detach();
+    
+    // Set the data and resolve the promise
+    *prom.data() = "Hello from producer!";
+    prom.resolve();
+    
+    co_return;
+}
+
+io::fsm_func<void> data_consumer(io::future_with<std::string> fut)
+{
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    
+    // Wait for the future to be resolved
+    co_await fut;
+    
+    // Access the data
+    std::cout << "Received: " << fut.data << std::endl;
+    
+    co_return;
+}
 ```
 
-When a promise resolves or rejects, it sets the awaiter's `set_lock` bit and calls the awaiter's `set()` method, which triggers the waiting coroutine to resume.
+### Error Handling
 
-### Coroutine Integration
-
-When a coroutine awaits a future, it registers a resumption function to the awaiter's `coro` field:
+Promises can also be rejected with an error code:
 
 ```cpp
-coro_set = [this](awaiter* awa) {
-    // Check conditions and then resume the coroutine
-    std::coroutine_handle<io::fsm_promise<T_FSM>> h;
-    h = h.from_promise(this->f_p);
-    h.resume();
-};
+io::fsm_func<void> error_example()
+{
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    
+    io::future fut;
+    io::promise<void> prom = fsm.make_future(fut);
+    
+    // Reject the promise with an error
+    prom.reject(std::make_error_code(std::errc::operation_canceled));
+    
+    co_return;
+}
+
+io::fsm_func<void> handle_errors(io::future fut)
+{
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    
+    try {
+        // Wait for the future
+        co_await fut;
+        std::cout << "Success!" << std::endl;
+    } catch (const std::system_error& e) {
+        // Handle the error
+        std::cout << "Error: " << e.what() << std::endl;
+    }
+    
+    co_return;
+}
 ```
 
-When the future is resolved, this function is called, resuming the coroutine's execution.
+### Combining Multiple Futures
 
-### Composition Operations
+io::manager provides JavaScript-style combinators for working with multiple futures:
 
-The library supports combining multiple futures with operations like `all`, `any`, `race`, and `allSettle`:
+#### all - Wait for all futures to resolve
 
 ```cpp
-// Example usage
-auto combined_future = io::future::all(future1, future2, future3);
-co_await combined_future;
+io::fsm_func<void> wait_for_all()
+{
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    
+    io::future fut1, fut2, fut3;
+    io::promise<void> prom1 = fsm.make_future(fut1);
+    io::promise<void> prom2 = fsm.make_future(fut2);
+    io::promise<void> prom3 = fsm.make_future(fut3);
+    
+    // Create a combined future that resolves when all futures resolve
+    auto combined = io::future::all(fut1, fut2, fut3);
+    
+    // Resolve the promises (could be in different coroutines)
+    prom1.resolve();
+    prom2.resolve();
+    prom3.resolve();
+    
+    // Wait for all futures to resolve
+    co_await combined;
+    
+    std::cout << "All futures resolved!" << std::endl;
+    
+    co_return;
+}
 ```
 
-These combinators track multiple awaiter objects and implement different completion semantics.
-
-### Memory Safety Considerations
-
-The library explicitly notes several memory safety constraints:
+#### any - Wait for any future to resolve
 
 ```cpp
-// Not Thread safe.
-// UB: The lifetime of memory binding by the future-promise pair is shorter than the io::future
-// future cannot being co_await by more than one coroutine.
+io::fsm_func<void> wait_for_any()
+{
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    
+    io::future fut1, fut2, fut3;
+    io::promise<void> prom1 = fsm.make_future(fut1);
+    io::promise<void> prom2 = fsm.make_future(fut2);
+    io::promise<void> prom3 = fsm.make_future(fut3);
+    
+    // Create a combined future that resolves when any future resolves
+    auto combined = io::future::any(fut1, fut2, fut3);
+    
+    // Resolve one promise
+    prom2.resolve();
+    
+    // Wait for any future to resolve
+    co_await combined;
+    
+    std::cout << "At least one future resolved!" << std::endl;
+    
+    co_return;
+}
 ```
 
-This indicates:
-1. Future/promise pairs are not thread-safe
-2. Memory bound to a future must outlive the future itself
-3. A future cannot be awaited by multiple coroutines simultaneously
-
-### Deferred Execution
-
-The library supports deferred resolution/rejection:
+#### race - Similar to any, but rejects if any future rejects
 
 ```cpp
-// From promise_base::resolve_later()
-awaiter->no_tm.queue_next = awaiter;
-std::swap(awaiter->no_tm.queue_next, awaiter->mngr->resolve_queue_local);
-awaiter->mngr->suspend_release();
+io::fsm_func<void> race_example()
+{
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    
+    io::future fut1, fut2;
+    io::promise<void> prom1 = fsm.make_future(fut1);
+    io::promise<void> prom2 = fsm.make_future(fut2);
+    
+    // Create a race between futures
+    auto race_result = io::future::race(fut1, fut2);
+    
+    // Start two operations in parallel
+    fsm.spawn_now([prom1]() -> io::fsm_func<void> {
+        io::fsm<void> &fsm = co_await io::get_fsm;
+        // Simulate work
+        co_await fsm.setTimeout(std::chrono::seconds(2));
+        prom1.resolve();
+        co_return;
+    }()).detach();
+    
+    fsm.spawn_now([prom2]() -> io::fsm_func<void> {
+        io::fsm<void> &fsm = co_await io::get_fsm;
+        // Simulate work
+        co_await fsm.setTimeout(std::chrono::seconds(1));
+        prom2.resolve();
+        co_return;
+    }()).detach();
+    
+    // Wait for the race result
+    co_await race_result;
+    
+    std::cout << "Race completed!" << std::endl;
+    
+    co_return;
+}
 ```
 
-These operations don't immediately trigger coroutine resumption but queue the awaiter for later processing by the manager.
+### Deferred Resolution
+
+For operations that may complete asynchronously, you can use deferred resolution:
+
+```cpp
+io::fsm_func<void> async_operation()
+{
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    
+    io::future fut;
+    io::promise<void> prom = fsm.make_future(fut);
+    
+    // Start an asynchronous operation
+    std::thread([prom = std::move(prom)]() mutable {
+        // Simulate work in another thread
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        
+        // Resolve the promise later
+        prom.resolve_later();
+    }).detach();
+    
+    // Wait for the future
+    co_await fut;
+    
+    std::cout << "Async operation completed!" << std::endl;
+    
+    co_return;
+}
+```
+
+### Best Practices
+
+1. **Lifetime Management**: Ensure futures outlive their usage in coroutines.
+2. **Single Awaiter**: A future should only be awaited by one coroutine at a time.
+3. **Error Handling**: Always handle potential rejections when awaiting futures.
+4. **Combinators**: Use combinators like `all`, `any`, and `race` to manage multiple concurrent operations.
 
 ## Performance
 
