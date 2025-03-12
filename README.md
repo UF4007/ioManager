@@ -19,6 +19,15 @@
 	</a>
 </div>
 
+<div align="right">
+    <a href="README_zh.md">
+        <img src="https://img.shields.io/badge/语言-中文-red.svg" alt="Chinese">
+    </a>
+    <a href="README.md">
+        <img src="https://img.shields.io/badge/Language-English-blue.svg" alt="English">
+    </a>
+</div>
+
 # io::manager - High Performance Pipeline Concurrency Library
 
 A modern C++20 header-only library for high-performance asynchronous I/O operations and coroutine-based concurrency.
@@ -30,21 +39,38 @@ io::manager provides a comprehensive solution for building efficient, concurrent
 ### Key Features
 
 - **Pipeline Concurrency Model**: Efficient data flow processing with a clear protocol stream approach
-- **C++20 Coroutines**: Full support for C++20 coroutines with a high-performance scheduler
 - **Future/Promise Pattern**: JS-style future/promise with all/any/race/allSettle operations
-- **Channel-based Communication**: Golang-style channels and async channels for inter-coroutine communication
-- **Lock-free Structures**: Multi-thread lock-free structures for maximum performance
+- **Channel-based Communication**: Golang-style channels and async channels for inter-coroutine communication and inter-thread communication
 - **RAII Friendly**: Resource management follows RAII principles for safety and reliability
 - **High Performance**: Close to the speed of native C++ coroutines, supporting more than 100M coroutines per second switch speed in a single thread
-- **Protocol Support**: Built-in support for various network protocols (HTTP, DNS, SNTP, ICMP, KCP)
-- **Cross-platform**: Works on Windows, Linux, and ESP platforms
 
-## Requirements
+## Table of Contents
+
+- [Finite State Machine (FSM): The Core of io::manager](#finite-state-machine-fsm-the-core-of-iomanager)
+  - [Creating a Basic FSM Coroutine](#creating-a-basic-fsm-coroutine)
+  - [Spawning and Managing Coroutines](#spawning-and-managing-coroutines)
+  - [Using Delays](#using-delays)
+  - [FSM with Associated Values](#fsm-with-associated-values)
+  - [Managing Coroutine Lifetime](#managing-coroutine-lifetime)
+  - [Creating a Manager](#creating-a-manager)
+- [Future/Promise: Coroutine Communication](#futurepromise-coroutine-communication)
+  - [Creating and Using Future/Promise Pairs](#creating-and-using-futurepromise-pairs)
+  - [Error Handling](#error-handling)
+  - [Combining Multiple Futures](#combining-multiple-futures)
+  - [Multi-thread Resolution with async_future/async_promise](#multi-thread-resolution-with-async_futureasync_promise)
+  - [Coroutines with Future Return Type](#coroutines-with-future-return-type)
+- [Protocols and Pipelines](#protocols-and-pipelines)
+  - [Protocol Concept](#protocol-concept)
+  - [Pipeline Mechanism](#pipeline-mechanism)
+- [Performance](#performance)
+- [License](#license)
+- [Contributing](#contributing)
+- [Acknowledgements](#acknowledgements)
+
+## Requirements and Installation
 
 - C++20 compatible compiler
 - Supported platforms: Windows, Linux, ESP
-
-## Installation
 
 io::manager is a header-only library. Simply include the main header file in your project:
 
@@ -131,7 +157,7 @@ io::fsm_func<void> timer_example()
 
 ### FSM with Associated Values
 
-Coroutines can return values using `io::fsm_func<T>` where `T` is the associated type:
+There is built-in value in coroutines using `io::fsm_func<T>` where `T` is the associated type:
 
 ```cpp
 io::fsm_func<int> compute_value()
@@ -196,21 +222,16 @@ io::fsm_func<void> lifetime_example()
 
 ### Creating a Manager
 
-In most cases, you'll use the default manager provided by io::manager. However, you can create and drive your own manager:
+a io::manager == a thread
 
 ```cpp
+io::manager mgr;
 int main() {
-    // Create a manager
-    io::manager mgr;
-    
-    // Spawn a coroutine
-    auto handle = mgr.spawn_later(parent_coroutine());
+    mgr.spawn_later(parent_coroutine()).detach();
     
     // Drive the manager (process coroutines)
     while (true) {
         mgr.drive();
-        // Break condition when all work is done
-        if (handle.done()) break;
     }
     
     return 0;
@@ -510,19 +531,42 @@ io::manager provides a powerful protocol and pipeline system that enables effici
 
 ### Protocol Concept
 
-In io::manager, protocols are divided into two distinct categories:
+In io::manager, protocols are divided into two main categories with specific subtypes:
 
-1. **Output Protocol**: A protocol that can output data, implementing the `operator>>` operation.
-   - Defines a `prot_output_type` that specifies the type of data it produces
-   - Implements `operator>>(future_with<prot_output_type>&)` for asynchronous data output
-   - Used as a data source in a pipeline
+#### Output Protocols (3 types)
 
-2. **Input Protocol**: A protocol that can accept input data, implementing the `operator<<` operation.
+An Output Protocol is a protocol that can output data, implementing the `operator>>` operation. There are three distinct types:
+
+1. **Future-with Output Protocol**: 
+   - Defines a non-void `prot_output_type` that specifies the type of data it produces
+   - Implements `operator>>(future_with<prot_output_type>&)` for asynchronous data output with associated data
+   - Allows awaiting the future to receive data
+
+2. **Direct Output Protocol**: 
+   - Defines a non-void `prot_output_type` that specifies the type of data it produces
+   - Implements `operator>>(prot_output_type&)` for direct data output without futures
+   - Data is directly written to the provided reference without any awaiting
+
+3. **Void-type Future Output Protocol**: 
+   - Defines `prot_output_type` as `void`
+   - Implements `operator>>(future&)` for signaling completion without data
+   - Used when only completion notification is needed, not data transfer
+
+#### Input Protocols (2 types)
+
+An Input Protocol is a protocol that can accept input data, implementing the `operator<<` operation. There are two distinct types:
+
+1. **Future-returning Input Protocol**: 
    - Defines a `prot_input_type` that specifies the type of data it accepts
-   - Implements `operator<<(const prot_input_type&)` that returns a future for asynchronous operations
-   - Used as a data sink in a pipeline
+   - Implements `operator<<(const prot_input_type&)` that returns a `future`
+   - The returned future resolves when the operation completes
 
-Many protocols implement both interfaces, making them dual-protocol components that can both receive and send data.
+2. **Direct Input Protocol**:
+   - Defines a `prot_input_type` that specifies the type of data it accepts
+   - Implements `operator<<(const prot_input_type&)` that returns `void`
+   - Operation completes synchronously or manages its own completion
+
+Many protocols implement both input and output interfaces, making them dual-protocol components that can both receive and send data.
 
 #### Protocol Interface
 
@@ -535,12 +579,14 @@ struct my_protocol {
     using prot_output_type = OutputType; // Type of data this protocol produces
     
     // Output operation (implements Output Protocol)
+    // Can be any of the three output protocol types
     void operator>>(future_with<OutputType>& fut) {
         // Implementation for outputting data
         // When data is available, resolve the future with the data
     }
     
     // Input operation (implements Input Protocol)
+    // Can be either of the two input protocol types
     future operator<<(const InputType& data) {
         // Implementation for accepting input data
         // Return a future that resolves when the operation completes
@@ -550,13 +596,18 @@ struct my_protocol {
 
 ### Pipeline Mechanism
 
-Pipelines in io::manager allow you to connect multiple protocols together to create a data processing flow. Data flows from one protocol to another, with optional adapters in between to transform the data.
+A pipeline is an assembly of protocols that forms a single awaitable entity. The pipeline mechanism works by:
+
+1. **Independent Triggering**: Each segment of the pipeline can be independently triggered and processed.
+
+2. **Directionality**: Data flowing in a single direction from the output protocol to the input protocol of a segment of pipeline.
 
 In a pipeline:
 - The first protocol must be an Output Protocol
 - The last protocol must be an Input Protocol
 - Intermediate protocols must implement both interfaces (dual-protocol)
 - Adapters can be used to transform data between incompatible protocols
+- Two Direct protocols (Direct Output Protocol and Direct Input Protocol) cannot be connected to each other in a pipeline
 
 #### Creating a Pipeline
 
@@ -581,7 +632,7 @@ auto pipeline = io::pipeline<>() >> protocol1 >>
 
 #### Driving a Pipeline
 
-Once a pipeline is created, you can drive it using the `<=` operator and the `+` operator:
+Once a pipeline is created, you can drive it in a coroutine using the `<=` operator and the `+` operator:
 
 ```cpp
 // Process the pipeline once
