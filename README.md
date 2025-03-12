@@ -73,7 +73,8 @@ io::fsm_func<void> example_coroutine()
     io::promise<void> prom = fsm.make_future(fut);
     
     // Pass the future to another coroutine that will wait on it
-    fsm.spawn_now(wait_for_future(fut)).detach();
+    // Note: future is passed by reference to avoid copying
+    fsm.spawn_now(wait_for_future(std::ref(fut))).detach();
     
     // Do some work...
     
@@ -83,13 +84,13 @@ io::fsm_func<void> example_coroutine()
     co_return;
 }
 
-io::fsm_func<void> wait_for_future(io::future fut)
+io::fsm_func<void> wait_for_future(std::reference_wrapper<io::future> fut_ref)
 {
     // Get the FSM context
     io::fsm<void> &fsm = co_await io::get_fsm;
     
     // Wait for the future to be resolved
-    co_await fut;
+    co_await fut_ref.get();
     
     // Continue execution after the future is resolved
     std::cout << "Future resolved!" << std::endl;
@@ -111,8 +112,8 @@ io::fsm_func<void> data_producer()
     io::future_with<std::string> fut;
     io::promise<std::string> prom = fsm.make_future(fut, &fut.data);
     
-    // Pass the future to a consumer
-    fsm.spawn_now(data_consumer(std::move(fut))).detach();
+    // Pass the future to a consumer (by reference since future_with cannot be moved)
+    fsm.spawn_now(data_consumer(std::ref(fut))).detach();
     
     // Set the data and resolve the promise
     *prom.data() = "Hello from producer!";
@@ -121,15 +122,15 @@ io::fsm_func<void> data_producer()
     co_return;
 }
 
-io::fsm_func<void> data_consumer(io::future_with<std::string> fut)
+io::fsm_func<void> data_consumer(std::reference_wrapper<io::future_with<std::string>> fut_ref)
 {
     io::fsm<void> &fsm = co_await io::get_fsm;
     
     // Wait for the future to be resolved
-    co_await fut;
+    co_await fut_ref.get();
     
     // Access the data
-    std::cout << "Received: " << fut.data << std::endl;
+    std::cout << "Received: " << fut_ref.get().data << std::endl;
     
     co_return;
 }
@@ -153,17 +154,21 @@ io::fsm_func<void> error_example()
     co_return;
 }
 
-io::fsm_func<void> handle_errors(io::future fut)
+io::fsm_func<void> handle_errors(std::reference_wrapper<io::future> fut_ref)
 {
     io::fsm<void> &fsm = co_await io::get_fsm;
     
-    try {
-        // Wait for the future
-        co_await fut;
+    // Wait for the future to be resolved
+    co_await fut_ref.get();
+    
+    // Check for errors after awaiting
+    if (fut_ref.get().getErr())
+    {
+        std::cout << "Error: " << fut_ref.get().getErr().message() << std::endl;
+    }
+    else
+    {
         std::cout << "Success!" << std::endl;
-    } catch (const std::system_error& e) {
-        // Handle the error
-        std::cout << "Error: " << e.what() << std::endl;
     }
     
     co_return;
@@ -245,7 +250,7 @@ io::fsm_func<void> race_example()
     auto race_result = io::future::race(fut1, fut2);
     
     // Start two operations in parallel
-    fsm.spawn_now([prom1]() -> io::fsm_func<void> {
+    fsm.spawn_now([&prom1]() -> io::fsm_func<void> {
         io::fsm<void> &fsm = co_await io::get_fsm;
         // Simulate work
         co_await fsm.setTimeout(std::chrono::seconds(2));
@@ -253,7 +258,7 @@ io::fsm_func<void> race_example()
         co_return;
     }()).detach();
     
-    fsm.spawn_now([prom2]() -> io::fsm_func<void> {
+    fsm.spawn_now([&prom2]() -> io::fsm_func<void> {
         io::fsm<void> &fsm = co_await io::get_fsm;
         // Simulate work
         co_await fsm.setTimeout(std::chrono::seconds(1));
@@ -270,28 +275,30 @@ io::fsm_func<void> race_example()
 }
 ```
 
-### Deferred Resolution
+### Deferred Resolution with async_future/async_promise
 
-For operations that may complete asynchronously, you can use deferred resolution:
+For operations that may complete asynchronously (especially from other threads), use async_future/async_promise:
 
 ```cpp
 io::fsm_func<void> async_operation()
 {
     io::fsm<void> &fsm = co_await io::get_fsm;
     
-    io::future fut;
-    io::promise<void> prom = fsm.make_future(fut);
+    // Create an async_future and its corresponding async_promise
+    io::async_future fut;
+    io::async_promise prom = fsm.make_future(fut);
     
     // Start an asynchronous operation
     std::thread([prom = std::move(prom)]() mutable {
         // Simulate work in another thread
         std::this_thread::sleep_for(std::chrono::seconds(1));
         
-        // Resolve the promise later
-        prom.resolve_later();
+        // Resolve the async_promise from another thread
+        // async_promise is thread-safe
+        prom.resolve();
     }).detach();
     
-    // Wait for the future
+    // Wait for the async_future
     co_await fut;
     
     std::cout << "Async operation completed!" << std::endl;
@@ -299,13 +306,6 @@ io::fsm_func<void> async_operation()
     co_return;
 }
 ```
-
-### Best Practices
-
-1. **Lifetime Management**: Ensure futures outlive their usage in coroutines.
-2. **Single Awaiter**: A future should only be awaited by one coroutine at a time.
-3. **Error Handling**: Always handle potential rejections when awaiting futures.
-4. **Combinators**: Use combinators like `all`, `any`, and `race` to manage multiple concurrent operations.
 
 ## Performance
 
