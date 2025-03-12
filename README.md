@@ -52,6 +52,173 @@ io::manager is a header-only library. Simply include the main header file in you
 #include "ioManager/ioManager.h"
 ```
 
+## Finite State Machine (FSM): The Core of io::manager
+
+At the heart of io::manager is its Finite State Machine (FSM) implementation, which provides the foundation for creating and managing coroutines. Understanding how to create and use FSMs is essential before diving into more advanced features.
+
+### Creating a Basic FSM Coroutine
+
+Every coroutine in io::manager is defined as an FSM function using the `io::fsm_func<T>` template, where `T` is the associated type:
+
+```cpp
+io::fsm_func<void> simple_coroutine()
+{
+    // Get the FSM context
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    
+    // Your coroutine code here
+    std::cout << "Hello from a coroutine!" << std::endl;
+    
+    co_return;
+}
+```
+
+The first step in any coroutine is to obtain the FSM context using `co_await io::get_fsm`. This gives you access to the FSM instance that manages the coroutine's state and provides methods for creating futures, timers, channels, and spawning other coroutines.
+
+### Spawning and Managing Coroutines
+
+You can spawn new coroutines from an existing one using the `spawn_now` or `getManager()->spawn_later` methods:
+
+```cpp
+io::fsm_func<void> parent_coroutine()
+{
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    
+    // Spawn a child coroutine and get a handle to it
+    io::fsm_handle<void> child_handle = fsm.spawn_now(simple_coroutine());
+    
+    // Or detach it to let it run independently
+    // child_handle.detach();
+    
+    std::cout << "Parent coroutine continues after child" << std::endl;
+    
+    co_return;
+}
+```
+
+The difference between `spawn_now` and `getManager()->spawn_later`:
+- `spawn_now`: Starts the coroutine immediately
+- `getManager()->spawn_later`: Queues the coroutine for later execution
+
+### Using Delays
+
+FSMs can create clocks for scheduling operations:
+
+```cpp
+io::fsm_func<void> timer_example()
+{
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    
+    // Create a timer for 2 seconds
+    io::clock timer;
+    fsm.make_clock(timer, std::chrono::seconds(2));
+    
+    std::cout << "Waiting for 2 seconds..." << std::endl;
+    
+    // Wait for the timer
+    co_await timer;
+    
+    std::cout << "Timer completed!" << std::endl;
+    
+    // Shorthand for creating and awaiting a timer
+    co_await fsm.setTimeout(std::chrono::milliseconds(500));
+    
+    std::cout << "Another delay completed!" << std::endl;
+    
+    co_return;
+}
+```
+
+### FSM with Associated Values
+
+Coroutines can return values using `io::fsm_func<T>` where `T` is the associated type:
+
+```cpp
+io::fsm_func<int> compute_value()
+{
+    io::fsm<int> &fsm = co_await io::get_fsm;
+    
+    // Perform some computation
+    int result = 42;
+    
+    // Store the result in the FSM's data
+    *fsm = result;
+    
+    co_return;
+}
+
+io::fsm_func<void> use_computed_value()
+{
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    
+    // Spawn a coroutine that returns a value
+    io::fsm_handle<int> handle = fsm.spawn_now(compute_value());
+    
+    // Access the returned value
+    int value = *handle;
+    std::cout << "Computed value: " << value << std::endl;
+    
+    co_return;
+}
+```
+
+### Managing Coroutine Lifetime
+
+The `fsm_handle<T>` class provides methods for managing coroutine lifetime:
+
+```cpp
+io::fsm_func<void> lifetime_example()
+{
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    
+    // Create a handle to a coroutine
+    io::fsm_handle<void> handle = fsm.spawn_now(simple_coroutine());
+    
+    // Check if the coroutine is done
+    if (handle.done()) {
+        std::cout << "Coroutine completed" << std::endl;
+    }
+    
+    // Detach the coroutine (it will continue running independently)
+    handle.detach();
+    
+    // Destroy the coroutine (only if not detached)
+    // handle.destroy();
+    
+    co_return;
+}
+```
+
+> **Important Notes:**
+> - When a `fsm_handle` is destroyed without being detached, the corresponding coroutine is also destroyed.
+> - Detached coroutines continue running until they complete or the manager is destroyed.
+> - The FSM context (`io::fsm<T>`) is only valid within the coroutine that obtained it.
+
+### Creating a Manager
+
+In most cases, you'll use the default manager provided by io::manager. However, you can create and drive your own manager:
+
+```cpp
+int main() {
+    // Create a manager
+    io::manager mgr;
+    
+    // Spawn a coroutine
+    auto handle = mgr.spawn_later(parent_coroutine());
+    
+    // Drive the manager (process coroutines)
+    while (true) {
+        mgr.drive();
+        // Break condition when all work is done
+        if (handle.done()) break;
+    }
+    
+    return 0;
+}
+```
+
+The `drive()` method processes pending coroutines, resolves futures, and handles timers. It's typically called in a loop until all work is complete.
+
 ## Future/Promise: Coroutine Communication
 
 The future/promise pattern in io::manager provides a powerful way for coroutines to communicate and synchronize with each other. This pattern is similar to JavaScript's Promise system but optimized for C++ coroutines.
@@ -273,6 +440,138 @@ io::fsm_func<void> async_operation()
     co_return;
 }
 ```
+
+### Future-Returning Coroutines
+
+io::manager provides a special mechanism for coroutines that represent asynchronous operations and can be awaited directly.
+
+```cpp
+// A coroutine that performs an asynchronous operation
+io::fsm_func<void> async_operation_impl()
+{
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    
+    // Perform some asynchronous work
+    co_await fsm.setTimeout(std::chrono::seconds(1));
+    
+    co_return;
+}
+
+// Using spawn_now to create and await an asynchronous operation
+io::fsm_func<void> use_async_operation()
+{
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    
+    // Create a future
+    io::future fut;
+    io::promise<void> prom = fsm.make_future(fut);
+    
+    // Spawn the async operation and attach the promise
+    fsm.spawn_now([prom = std::move(prom)]() -> io::fsm_func<void> {
+        io::fsm<void> &fsm = co_await io::get_fsm;
+        
+        // Perform some asynchronous work
+        co_await fsm.setTimeout(std::chrono::seconds(1));
+        
+        // Resolve the promise when done
+        prom.resolve();
+        
+        co_return;
+    }()).detach();
+    
+    // Wait for the operation to complete
+    co_await fut;
+    
+    co_return;
+}
+
+// For returning data with a future
+io::fsm_func<void> async_data_operation_impl(std::string& result)
+{
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    
+    // Perform some asynchronous work
+    co_await fsm.setTimeout(std::chrono::milliseconds(500));
+    
+    // Set the data to be returned
+    result = "Operation completed successfully";
+    
+    co_return;
+}
+
+// Using spawn_now to create and await an asynchronous operation that returns data
+io::fsm_func<void> use_async_data_operation()
+{
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    
+    // Create a future with data
+    io::future_with<std::string> data_result;
+    io::promise<std::string> prom = fsm.make_future(data_result, &data_result.data);
+    
+    // Spawn the async operation and attach the promise
+    fsm.spawn_now([prom = std::move(prom)]() -> io::fsm_func<void> {
+        io::fsm<void> &fsm = co_await io::get_fsm;
+        
+        // Perform some asynchronous work
+        co_await fsm.setTimeout(std::chrono::milliseconds(500));
+        
+        // Set the data to be returned
+        *prom.data() = "Operation completed successfully";
+        
+        // Resolve the promise when done
+        prom.resolve();
+        
+        co_return;
+    }()).detach();
+    
+    // Wait for the operation to complete
+    co_await data_result;
+    
+    std::cout << "Result: " << data_result.data << std::endl;
+    
+    co_return;
+}
+
+// Using future-returning coroutines
+io::fsm_func<void> use_future_coroutines()
+{
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    
+    // Create a future
+    io::future result;
+    io::promise<void> prom1 = fsm.make_future(result);
+    
+    // Spawn the async operation
+    fsm.spawn_now([prom = std::move(prom1)]() -> io::fsm_func<void> {
+        io::fsm<void> &fsm = co_await io::get_fsm;
+        co_await fsm.setTimeout(std::chrono::seconds(1));
+        prom.resolve();
+        co_return;
+    }()).detach();
+    
+    // Wait for the result
+    co_await result;
+    
+    // Create a future with data
+    io::future_with<std::string> data_result;
+    io::promise<std::string> prom2 = fsm.make_future(data_result, &data_result.data);
+    
+    // Spawn the async data operation
+    fsm.spawn_now([prom = std::move(prom2)]() -> io::fsm_func<void> {
+        io::fsm<void> &fsm = co_await io::get_fsm;
+        co_await fsm.setTimeout(std::chrono::milliseconds(500));
+        *prom.data() = "Operation completed successfully";
+        prom.resolve();
+        co_return;
+    }()).detach();
+    
+    // Wait for the data result
+    co_await data_result;
+    
+    std::cout << "Result: " << data_result.data << std::endl;
+    
+    co_return;
+}
 
 > **Important:** 
 > - Unlike regular promise/future, `async_promise` is thread-safe and can be safely used across threads.
