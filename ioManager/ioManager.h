@@ -2003,6 +2003,13 @@ namespace io
 
             template <typename T1, typename T2>
             inline constexpr bool is_compatible_prot_pair_v = is_compatible_prot_pair<T1, T2>::value;
+
+            // Concept to check if a type is a valid error handler for pipeline
+            template <typename T>
+            concept PipelineErrorHandler =
+                requires(T handler, int which, bool output_or_input) {
+                    { handler(which, output_or_input) } -> std::same_as<void>;
+            };
         };
 
         template <typename Front = void, typename Rear = void, typename Adaptor = void>
@@ -2013,7 +2020,40 @@ namespace io
             using Adaptor_t = typename Adaptor;
 
             inline decltype(auto) start() && {
-                return pipeline_started<std::remove_reference_t<decltype(*this)>, false>(std::move(*this));
+                return pipeline_started<std::remove_reference_t<decltype(*this)>, false, std::monostate>(std::move(*this));
+            }
+
+            template <typename ErrorHandler>
+                requires trait::PipelineErrorHandler<ErrorHandler>
+            inline decltype(auto) start(ErrorHandler&& e)&& {
+                return pipeline_started<std::remove_reference_t<decltype(*this)>, false, ErrorHandler>(std::move(*this), std::forward<ErrorHandler>(e));
+            }
+
+            template <typename T_FSM>
+            inline decltype(auto) spawn(T_FSM& fsm)&& {
+                pipeline_started<std::remove_reference_t<decltype(*this)>, true, void> ret =
+                    fsm.spawn_now([](decltype(*this) t)->fsm_func<void> {
+                    pipeline_started<std::remove_reference_t<decltype(*this)>, false, std::monostate> pipeline_s(std::move(t));
+                    while (1)
+                    {
+                        pipeline_s <= co_await +pipeline_s;
+                    }
+                        }(*this));
+                return ret;
+            }
+
+            template <typename T_FSM, typename ErrorHandler>
+                requires trait::PipelineErrorHandler<ErrorHandler>
+            inline decltype(auto) spawn(T_FSM& fsm, ErrorHandler&& e)&& {
+                pipeline_started<std::remove_reference_t<decltype(*this)>, true, ErrorHandler> ret =
+                    fsm.spawn_now([](decltype(*this) t, ErrorHandler&& e)->fsm_func<void> {
+                    pipeline_started<std::remove_reference_t<decltype(*this)>, false, ErrorHandler> pipeline_s(std::move(t), std::forward<ErrorHandler>(e));
+                    while (1)
+                    {
+                        pipeline_s <= co_await +pipeline_s;
+                    }
+                        }(*this, std::forward<ErrorHandler>(e)));
+                return ret;
             }
 
             //rear
@@ -2060,9 +2100,6 @@ namespace io
             pipeline(pipeline&) = delete;
             void operator=(pipeline&) = delete;
             
-            // Make pipeline_started a friend class so it can access private members
-            friend class pipeline_started<Front, Rear, Adaptor>;
-            
         private:
             inline decltype(auto) awaitable() {
                 std::array<future*, pair_sum()> futures;
@@ -2081,32 +2118,48 @@ namespace io
                 }
             }
 
-            inline void process(int which) {
+            template <typename ErrorHandler>
+            inline void process(int which, ErrorHandler errorHandler) {
                 if (which == this->pair_sum() - 1) {
                     if constexpr (trait::is_output_prot_gen<std::remove_reference_t<Front>>::await && trait::is_input_prot<std::remove_reference_t<Rear>>::await) {
                         if (turn == 1) {
-                            if constexpr (!std::is_void_v<Adaptor>) {
-                                auto adapted_data = adaptor(front_future.data);
-                                if (adapted_data) {
-                                    rear_future = rear << *adapted_data;
-                                    turn = 3;
+                            if (front_future.getErr()) {
+                                if constexpr (std::is_same_v<ErrorHandler, std::monostate> == false)
+                                {
+                                    errorHandler(which, true);
                                 }
-                                else {
-                                    if constexpr (trait::is_pipeline_v<std::remove_reference_t<Front>>) {
-                                        front.rear >> front_future;
-                                    }
-                                    else {
-                                        front >> front_future;
-                                    }
-                                    turn = 1;
-                                }
+                                turn = 0;
                             }
                             else {
-                                rear_future = rear << front_future.data;
-                                turn = 3;
+                                if constexpr (!std::is_void_v<Adaptor>) {
+                                    auto adapted_data = adaptor(front_future.data);
+                                    if (adapted_data) {
+                                        rear_future = rear << *adapted_data;
+                                        turn = 3;
+                                    }
+                                    else {
+                                        if constexpr (trait::is_pipeline_v<std::remove_reference_t<Front>>) {
+                                            front.rear >> front_future;
+                                        }
+                                        else {
+                                            front >> front_future;
+                                        }
+                                        turn = 1;
+                                    }
+                                }
+                                else {
+                                    rear_future = rear << front_future.data;
+                                    turn = 3;
+                                }
                             }
                         }
                         else if (turn == 3) {
+                            if (front_future.getErr()) {
+                                if constexpr (std::is_same_v<ErrorHandler, std::monostate> == false)
+                                {
+                                    errorHandler(which, false);
+                                }
+                            }
                             turn = 0;
                         }
                         else {
@@ -2115,14 +2168,23 @@ namespace io
                     }
                     else if constexpr (trait::is_output_prot_gen<std::remove_reference_t<Front>>::await) {
                         if (turn == 1) {
-                            if constexpr (!std::is_void_v<Adaptor>) {
-                                auto adapted_data = adaptor(front_future.data);
-                                if (adapted_data) {
-                                    rear << *adapted_data;
+                            if (front_future.getErr()) {
+                                if constexpr (std::is_same_v<ErrorHandler, std::monostate> == false)
+                                {
+                                    errorHandler(which, true);
                                 }
+                                turn = 0;
                             }
                             else {
-                                rear << front_future.data;
+                                if constexpr (!std::is_void_v<Adaptor>) {
+                                    auto adapted_data = adaptor(front_future.data);
+                                    if (adapted_data) {
+                                        rear << *adapted_data;
+                                    }
+                                }
+                                else {
+                                    rear << front_future.data;
+                                }
                             }
                             turn = 0;
                         }
@@ -2132,6 +2194,12 @@ namespace io
                     }
                     else if constexpr (trait::is_input_prot<std::remove_reference_t<Rear>>::await) {
                         if (turn == 3) {
+                            if (rear_future.getErr()) {
+                                if constexpr (std::is_same_v<ErrorHandler, std::monostate> == false)
+                                {
+                                    errorHandler(which, false);
+                                }
+                            }
                             turn = 2;
                         }
                         else {
@@ -2141,21 +2209,12 @@ namespace io
                 }
                 else {
                     if constexpr (trait::is_pipeline_v<std::remove_reference_t<Front>>) {
-                        front.process(which);
+                        front.process(which, errorHandler);
                     }
                     else {
                         assert(!"pipeline ERROR: unexcepted pipeline num!");
                     }
                 }
-            }
-
-            // Move these operators to private to force users to use start()
-            inline void operator<=(int which) {
-                return process(which);
-            }
-
-            inline decltype(auto) operator+() {
-                return awaitable();
             }
             
             pipeline(pipeline&&) = default;
@@ -2357,14 +2416,19 @@ namespace io
         };
 
         // pipeline_started class - represents a started pipeline that cannot be extended
-        template <typename Pipeline, bool individual_coro>
-        class pipeline_started {
+        template <typename Pipeline, bool individual_coro, typename ErrorHandler>
+        class pipeline_started : std::conditional_t<individual_coro, fsm_handle<void>, std::monostate> {
             __IO_INTERNAL_HEADER_PERMISSION;
         public:
             // Constructor that takes ownership of a pipeline
             template <typename Front, typename Rear, typename Adaptor>
             explicit pipeline_started(pipeline<Front, Rear, Adaptor>&& pipe)
                 : _pipeline(std::move(pipe)) {
+            }
+
+            template <typename Front, typename Rear, typename Adaptor>
+            explicit pipeline_started(pipeline<Front, Rear, Adaptor>&& pipe, ErrorHandler&& e)
+                : _pipeline(std::move(pipe)), errorHandler(std::forward<ErrorHandler>(e)) {
             }
 
             // Delete copy constructor and assignment
@@ -2376,17 +2440,23 @@ namespace io
             pipeline_started& operator=(pipeline_started&&) = delete;
 
             // Drive the pipeline with a specific index
-            inline void operator<=(int which) {
-                _pipeline.process(which);
+            inline void operator<=(int which) requires (individual_coro == false){
+                if constexpr (std::is_same_v<ErrorHandler, std::monostate>) {
+                    _pipeline.process(which, std::monostate{});
+                }
+                else {
+                    _pipeline.process(which, std::ref(errorHandler));
+                }
             }
 
             // Get the awaitable for the pipeline
-            inline decltype(auto) operator+() {
+            inline decltype(auto) operator+() requires (individual_coro == false) {
                 return _pipeline.awaitable();
             }
 
         private:
-            Pipeline _pipeline;
+            [[no_unique_address]] std::conditional_t<individual_coro, std::monostate, Pipeline> _pipeline;
+            [[no_unique_address]] ErrorHandler errorHandler;
         };
 
         template <>

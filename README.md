@@ -622,12 +622,47 @@ auto pipeline = io::pipeline<>() >> protocol1 >>
 
 #### Driving a Pipeline
 
-Once a pipeline is created, you can drive it in a coroutine using the `<=` operator and the `+` operator:
+Once a pipeline is created, you need to start it first to obtain a `pipeline_started` object, and then drive it in a coroutine using the `<=` operator and the `+` operator:
 
 ```cpp
+// Start the pipeline to get a pipeline_started object
+auto started_pipeline = std::move(pipeline).start();
+
 // Process the pipeline once
-pipeline <= co_await +pipeline;
+started_pipeline <= co_await +started_pipeline;
 ```
+
+You can also provide an error handling callback when starting the pipeline. This callback will be called when any future in the pipeline returns an error:
+
+```cpp
+// Start the pipeline with an error handler
+auto started_pipeline = std::move(pipeline).start([](int which, bool output_or_input) {
+    std::cout << "Pipeline segment " << which << " encountered an error" << std::endl;
+});
+```
+
+The error handling callback should have a signature of `void(int, bool)`. If output_or_input is true, it indicates that the error occurred at the output end of the pipeline segment, otherwise at the input end.
+
+Additionally, you can directly spawn the pipeline into a coroutine that will continuously drive it:
+
+```cpp
+// Spawn the pipeline into a coroutine that will continuously drive it
+auto pipeline_handle = std::move(pipeline).spawn(fsm);
+
+// Spawn with an error handler
+auto pipeline_handle = std::move(pipeline).spawn(fsm, [](int which, bool output_or_input) {
+    std::cout << "Pipeline segment " << which << " encountered an error" << std::endl;
+    return true;
+});
+```
+
+The `spawn` method creates a coroutine that continuously drives the pipeline without manual driving.
+
+The `pipeline_started` class encapsulates the started state of the pipeline and prevents further modification. This design ensures:
+
+1. Users must call `pipeline::start()` to get a drivable pipeline.
+2. Once a pipeline is started, no new protocols can be added.
+3. The `pipeline_started` class is non-movable and non-copyable, ensuring pipeline stability.
 
 #### Complete Pipeline Example
 
@@ -666,10 +701,13 @@ io::fsm_func<void> pipeline_example() {
             return udp_data.first;
         } >> tcp_socket;
     
+    // Start the pipeline to get a pipeline_started object
+    auto started_pipeline = std::move(pipeline).start();
+    
     // Drive the pipeline in a loop
     while (true) {
         // Wait for the pipeline to complete a cycle
-        pipeline <= co_await +pipeline;
+        started_pipeline <= co_await +started_pipeline;
         
         std::cout << "Pipeline cycle completed" << std::endl;
     }

@@ -213,28 +213,25 @@ io::fsm_func<void> coro_tcp_echo_server()
             fsm.spawn_now(
                 [](io::sock::tcp socket) -> io::fsm_func<void>
                 {
+                    bool loop = true;
                     io::fsm<void>& fsm = co_await io::get_fsm;
                     
-                    while (1)
-                    {
-                        io::future_with<std::span<char>> read_future;
-                        socket >> read_future;
-                        co_await read_future;
-                        
-                        if (read_future.getErr()) {
-                            std::cerr << "Error while reading from socket: " << read_future.getErr().message() << std::endl;
-                            co_return;
+                    // Create a simple pipeline: socket >> socket
+                    // This pipeline reads data from the socket and writes it back to the socket
+                    auto pipeline = io::pipeline<>() >> socket >> socket;
+                    
+                    // Start the pipeline and set up error handling callback
+                    auto started_pipeline = std::move(pipeline).start(
+                        [&loop](int which, bool output_or_input) {
+                            std::cerr << "Pipeline error in segment " << which 
+                                      << (output_or_input ? " (output)" : " (input)") << std::endl;
+                            loop = false;
                         }
-
-                        io::future send_future = socket << read_future.data;
-                        co_await send_future;
-                        
-                        if (send_future.getErr()) {
-                            std::cerr << "Error while sending data to socket: " << send_future.getErr().message() << std::endl;
-                            co_return;
-                        }
-
-                        std::cout << "Echoed data back to client!" << std::endl;
+                    );
+                    
+                    // Drive the pipeline in a loop
+                    while (loop) {
+                        started_pipeline <= co_await +started_pipeline;
                     }
                 }(std::move(socket)))
                 .detach();
@@ -254,6 +251,7 @@ io::fsm_func<void> coro_tcp_echo_client()
 
     while (1)
     {
+        bool loop = true;
         io::sock::tcp client(fsm);
         io::future connect_future = client.connect(asio::ip::tcp::endpoint(asio::ip::address::from_string("127.0.0.1"), 12345));
         co_await connect_future;
@@ -268,9 +266,9 @@ io::fsm_func<void> coro_tcp_echo_client()
         }
 
         std::cout << "Connected to server at " << client.remote_endpoint() << std::endl;
-
         std::cout << "Local endpoint: " << client.local_endpoint() << std::endl;
 
+        // Send initial message
         std::string data = "Hello from TCP client! " + std::to_string(std::time(nullptr));
         std::span<char> data_span(data.data(), data.size());
 
@@ -283,28 +281,28 @@ io::fsm_func<void> coro_tcp_echo_client()
             break;
         }
 
-        while (1)
-        {
-            io::future_with<std::span<char>> read_future;
-            client >> read_future;
-            co_await read_future;
-
-            if (read_future.getErr()) {
-                std::cerr << "Error while reading from socket: " << read_future.getErr().message() << std::endl;
-                co_return;
+        // Create a pipeline: client >> client
+        // This pipeline reads data from the client and writes it back to the client
+        auto pipeline = io::pipeline<>() >> client >> client;
+        
+        // Start the pipeline and set up error handling callback
+        auto started_pipeline = std::move(pipeline).start(
+            [&loop](int which, bool output_or_input) {
+                std::cerr << "Pipeline error in segment " << which 
+                          << (output_or_input ? " (output)" : " (input)") << std::endl;
+                loop = false;
             }
-
-            io::future send_future = client << read_future.data;
-            co_await send_future;
-
-            if (send_future.getErr()) {
-                std::cerr << "Error while sending data to socket: " << send_future.getErr().message() << std::endl;
-                co_return;
-            }
-
-            std::cout << "Echoed data back to client!" << std::endl;
+        );
+        
+        // Drive the pipeline in a loop
+        while (loop) {
+            started_pipeline <= co_await +started_pipeline;
         }
+        
+        std::cout << "Client session completed." << std::endl;
     }
+    
+    co_return;
 }
 
 io::fsm_func<void> coro_udp_echo()
@@ -319,31 +317,68 @@ io::fsm_func<void> coro_udp_echo()
         co_return;
     }
 
-    while (1)
-    {
-        io::future_with<std::pair<std::span<char>, asio::ip::udp::endpoint>> recv_future;
-        socket >> recv_future;
-        co_await recv_future;
-        
-        if (recv_future.getErr()) {
-            std::cerr << "Error while reading from UDP socket: " << recv_future.getErr().message() << std::endl;
-            continue;
+    // Create a pipeline: socket >> socket
+    // This pipeline reads data from the socket and writes it back to the socket
+    auto pipeline = io::pipeline<>() >> socket >> socket;
+    
+    // Start the pipeline and set up error handling callback
+    auto started_pipeline = std::move(pipeline).start(
+        [](int which, bool output_or_input) {
+            std::cerr << "Pipeline error in segment " << which 
+                      << (output_or_input ? " (output)" : " (input)") << std::endl;
         }
-
-        auto& [data, peer] = recv_future.data;
-        std::string message(data.data(), data.size());
-        std::cout << "Received message from " << peer << ": " << message << std::endl;
-
-        io::future send_future = socket << std::make_pair(data, peer);
-        co_await send_future;
-
-        if (send_future.getErr()) {
-            std::cerr << "Error while sending message back to peer: " << send_future.getErr().message() << std::endl;
-            continue;
-        }
-
-        std::cout << "Echoed message back to " << peer << std::endl;
+    );
+    
+    // Drive the pipeline in a loop
+    while (1) {
+        started_pipeline <= co_await +started_pipeline;
     }
+    
+    co_return;
+}
+
+io::fsm_func<void> coro_udp_echo_with_adapter()
+{
+    io::fsm<void>& fsm = co_await io::get_fsm;
+    std::cout << "UDP Echo Server with Adapter started on port 12346..." << std::endl;
+
+    io::sock::udp socket(fsm);
+    
+    if (!socket.bind(asio::ip::udp::endpoint(asio::ip::udp::v4(), 12346))) {
+        std::cerr << "Failed to bind UDP socket to port 12346" << std::endl;
+        co_return;
+    }
+
+    // Create a pipeline with adapter: socket >> [adapter] >> socket
+    // The adapter is used to log received data and peer address
+    auto pipeline = io::pipeline<>() >> socket >> 
+        // Adapter from socket output to socket input
+        [](const std::pair<std::span<char>, asio::ip::udp::endpoint>& recv_data) -> std::optional<std::pair<std::span<char>, asio::ip::udp::endpoint>> {
+            // Destructure received data and peer address
+            const auto& [data, peer] = recv_data;
+            
+            // Log received data
+            std::string message(data.data(), data.size());
+            std::cout << "Received message from " << peer << ": " << message << std::endl;
+            
+            // Return original data and peer address without modification
+            return recv_data;
+        } >> socket;
+    
+    // Start the pipeline and set up error handling callback
+    auto started_pipeline = std::move(pipeline).start(
+        [](int which, bool output_or_input) {
+            std::cerr << "Pipeline error in segment " << which 
+                      << (output_or_input ? " (output)" : " (input)") << std::endl;
+        }
+    );
+    
+    // Drive the pipeline in a loop
+    while (1) {
+        started_pipeline <= co_await +started_pipeline;
+    }
+    
+    co_return;
 }
 
 io::fsm_func<void> coro_pipeline_test() {
@@ -544,10 +579,11 @@ io::fsm_func<void> coro_pipeline_test() {
             return "Number: " + std::to_string(value);
             } 
         >> input_prot;
+        auto started_pipeline = std::move(pipeline).start();
         
         for (int i = 0; i < 3; i++) {
             std::cout << "Cycle " << i+1 << ":" << std::endl;
-            pipeline <= co_await +pipeline;
+            started_pipeline <= co_await +started_pipeline;
         }
     }
     
@@ -562,10 +598,11 @@ io::fsm_func<void> coro_pipeline_test() {
             [](const std::string& value) -> std::optional<int> {
                 return static_cast<int>(value.length());
             } >> input_prot;
+        auto started_pipeline = std::move(pipeline).start();
         
         for (int i = 0; i < 3; i++) {
             std::cout << "Cycle " << i+1 << ":" << std::endl;
-            pipeline <= co_await +pipeline;
+            started_pipeline <= co_await +started_pipeline;
         }
     }
     
@@ -576,10 +613,11 @@ io::fsm_func<void> coro_pipeline_test() {
         FutureInputProtocol input_prot(fsm.getManager());
         
         auto pipeline = io::pipeline<>() >> output_prot >> input_prot;
+        auto started_pipeline = std::move(pipeline).start();
         
         for (int i = 0; i < 10; i++) {
             std::cout << "Cycle " << i+1 << ":" << std::endl;
-            pipeline <= co_await +pipeline;
+            started_pipeline <= co_await +started_pipeline;
         }
     }
     
@@ -592,10 +630,11 @@ io::fsm_func<void> coro_pipeline_test() {
         FutureInputProtocol input_prot(fsm.getManager());
         
         auto pipeline = io::pipeline<>() >> output_prot >> middle_prot >> middle_prot2 >> input_prot;
+        auto started_pipeline = std::move(pipeline).start();
         
         for (int i = 0; i < 10; i++) {
             std::cout << "Cycle " << i+1 << ":" << std::endl;
-            pipeline <= co_await +pipeline;
+            started_pipeline <= co_await +started_pipeline;
         }
     }
     
@@ -614,10 +653,11 @@ io::fsm_func<void> coro_pipeline_test() {
             [](const std::string& value) -> std::optional<std::string> {
                 return "Transformed: " + value;
             } >> middle_prot2 >> input_prot;
+            auto started_pipeline = std::move(pipeline).start();
         
         for (int i = 0; i < 10; i++) {
             std::cout << "Cycle " << i+1 << ":" << std::endl;
-            pipeline <= co_await +pipeline;
+            started_pipeline <= co_await +started_pipeline;
         }
     }
     
@@ -660,7 +700,7 @@ void io_testmain_v3()
         mngr.spawn_later(coro_down_timer()).detach();
 
     // tcp echo server
-    if (false)
+    if (true)
         mngr.spawn_later(coro_tcp_echo_server()).detach();
 
     // tcp echo client
@@ -671,8 +711,12 @@ void io_testmain_v3()
     if (false)
         mngr.spawn_later(coro_udp_echo()).detach();
 
+    // udp echo with adapter
+    if (false)
+        mngr.spawn_later(coro_udp_echo_with_adapter()).detach();
+
     // pipeline
-    if (true)
+    if (false)
         mngr.spawn_later(coro_pipeline_test()).detach();
 
     while (1)

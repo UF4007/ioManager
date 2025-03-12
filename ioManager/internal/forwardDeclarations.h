@@ -19,6 +19,7 @@
 																	friend struct io::sock::udp;\
 																	template <typename Rear2, typename Front2, typename Adaptor2>friend struct io::pipeline_constructor;\
 																	template <typename Rear2, typename Front2, typename Adaptor2>friend struct io::pipeline;\
+																	template <typename Pipeline2, bool individual_coro2, typename ErrorHandler2>friend class pipeline_started;\
 																	template <typename FSM_Index2, typename FSM_In2, typename FSM_Out2>friend struct io::rpc;\
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -53,7 +54,7 @@ struct manager;
 struct yield_t;
 template <typename Front, typename Rear, typename Adaptor>struct pipeline_constructor;
 template <typename Front, typename Rear, typename Adaptor>struct pipeline;
-template <typename Pipeline, bool individual_coro>class pipeline_started;
+template <typename Pipeline, bool individual_coro, typename ErrorHandler>class pipeline_started;
 template <typename FSM_Index, typename FSM_In, typename FSM_Out>struct rpc;
 namespace sock {
 	struct tcp;

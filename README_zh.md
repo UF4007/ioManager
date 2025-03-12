@@ -593,12 +593,47 @@ auto pipeline = io::pipeline<>() >> protocol1 >>
 
 #### 驱动管线
 
-创建管线后，可以手动在协程中使用`<=`操作符和`+`操作符驱动它：
+创建管线后，需要先调用 `start()` 方法获取一个 `pipeline_started` 对象，然后在协程中使用 `<=` 操作符和 `+` 操作符驱动它：
 
 ```cpp
+// 启动管线，获取 pipeline_started 对象
+auto started_pipeline = std::move(pipeline).start();
+
 // 处理管线一次
-pipeline <= co_await +pipeline;
+started_pipeline <= co_await +started_pipeline;
 ```
+
+您也可以在启动管线时提供一个错误处理回调函数。当管线中的任何 future 返回错误时，这个回调函数将被调用：
+
+```cpp
+// 使用错误处理器启动管线
+auto started_pipeline = std::move(pipeline).start([](int which, bool output_or_input) {
+    std::cout << "管线段 " << which << " 发生错误" << std::endl;
+});
+```
+
+错误处理回调函数应该具有 `void(int, bool)` 的签名。若output_or_input为true，则表示发生错误的是管线段的出口端，否则为入口端。
+
+另外，您可以直接将管线生成到一个会持续驱动它的协程中：
+
+```cpp
+// 将管线生成到一个会持续驱动它的协程中
+auto pipeline_handle = std::move(pipeline).spawn(fsm);
+
+// 带错误处理器的生成
+auto pipeline_handle = std::move(pipeline).spawn(fsm, [](int which, bool output_or_input) {
+    std::cout << "管线段 " << which << " 发生错误" << std::endl;
+    return true;
+});
+```
+
+`spawn` 方法创建一个持续驱动管线的协程，无需手动驱动。
+
+`pipeline_started` 类封装了管线的启动状态，并防止进一步修改。这种设计确保：
+
+1. 用户必须调用 `pipeline::start()` 才能获得可驱动的管线。
+2. 一旦管线启动，就不能添加新的协议。
+3. `pipeline_started` 类是不可移动和不可复制的，确保管线的稳定性。
 
 #### 完整管线示例
 
@@ -637,10 +672,13 @@ io::fsm_func<void> pipeline_example() {
             return udp_data.first;
         } >> tcp_socket;
     
+    // 启动管线，获取 pipeline_started 对象
+    auto started_pipeline = std::move(pipeline).start();
+    
     // 在循环中驱动管线
     while (true) {
         // 等待管线完成一个周期
-        pipeline <= co_await +pipeline;
+        started_pipeline <= co_await +started_pipeline;
         
         std::cout << "管线周期完成" << std::endl;
     }
