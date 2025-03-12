@@ -504,6 +504,139 @@ io::fsm_func<void> use_future_coroutines()
 }
 ```
 
+## Protocols and Pipelines
+
+io::manager provides a powerful protocol and pipeline system that enables efficient data flow processing with a clear protocol stream approach. This system is particularly useful for network applications, data processing, and any scenario requiring structured data flow between components.
+
+### Protocol Concept
+
+In io::manager, protocols are divided into two distinct categories:
+
+1. **Output Protocol**: A protocol that can output data, implementing the `operator>>` operation.
+   - Defines a `prot_output_type` that specifies the type of data it produces
+   - Implements `operator>>(future_with<prot_output_type>&)` for asynchronous data output
+   - Used as a data source in a pipeline
+
+2. **Input Protocol**: A protocol that can accept input data, implementing the `operator<<` operation.
+   - Defines a `prot_input_type` that specifies the type of data it accepts
+   - Implements `operator<<(const prot_input_type&)` that returns a future for asynchronous operations
+   - Used as a data sink in a pipeline
+
+Many protocols implement both interfaces, making them dual-protocol components that can both receive and send data.
+
+#### Protocol Interface
+
+A typical dual-protocol implementation includes:
+
+```cpp
+struct my_protocol {
+    // Define the data types for input and output
+    using prot_input_type = InputType;  // Type of data this protocol accepts
+    using prot_output_type = OutputType; // Type of data this protocol produces
+    
+    // Output operation (implements Output Protocol)
+    void operator>>(future_with<OutputType>& fut) {
+        // Implementation for outputting data
+        // When data is available, resolve the future with the data
+    }
+    
+    // Input operation (implements Input Protocol)
+    future operator<<(const InputType& data) {
+        // Implementation for accepting input data
+        // Return a future that resolves when the operation completes
+    }
+};
+```
+
+### Pipeline Mechanism
+
+Pipelines in io::manager allow you to connect multiple protocols together to create a data processing flow. Data flows from one protocol to another, with optional adapters in between to transform the data.
+
+In a pipeline:
+- The first protocol must be an Output Protocol
+- The last protocol must be an Input Protocol
+- Intermediate protocols must implement both interfaces (dual-protocol)
+- Adapters can be used to transform data between incompatible protocols
+
+#### Creating a Pipeline
+
+A pipeline is created using the `>>` operator to chain protocols together:
+
+```cpp
+auto pipeline = io::pipeline<>() >> output_protocol >> middle_protocol >> input_protocol;
+```
+
+#### Adapters
+
+Adapters are functions that transform data between protocols with incompatible types:
+
+```cpp
+auto pipeline = io::pipeline<>() >> protocol1 >> 
+    [](const Protocol1OutputType& data) -> std::optional<Protocol2InputType> {
+        // Transform data from protocol1's output to protocol2's input
+        // Return std::nullopt if the data should be skipped
+        return transformed_data;
+    } >> protocol2;
+```
+
+#### Driving a Pipeline
+
+Once a pipeline is created, you can drive it using the `<=` operator and the `+` operator:
+
+```cpp
+// Process the pipeline once
+pipeline <= co_await +pipeline;
+```
+
+#### Complete Pipeline Example
+
+Here's a complete example of a pipeline that transfers data from a TCP socket to a UDP socket and back:
+
+```cpp
+io::fsm_func<void> pipeline_example() {
+    io::fsm<void>& fsm = co_await io::get_fsm;
+    
+    // Create protocols
+    io::sock::tcp tcp_socket(fsm);
+    io::sock::udp udp_socket(fsm);
+    
+    // Connect TCP socket
+    asio::ip::tcp::endpoint tcp_endpoint(
+        asio::ip::address::from_string("127.0.0.1"), 8080);
+    co_await tcp_socket.connect(tcp_endpoint);
+    
+    // Bind UDP socket
+    asio::ip::udp::endpoint udp_endpoint(
+        asio::ip::address::from_string("0.0.0.0"), 8081);
+    co_await udp_socket.bind(udp_endpoint);
+    
+    // Create a pipeline: TCP -> UDP -> TCP
+    auto pipeline = io::pipeline<>() >> tcp_socket >> 
+        // Adapter from TCP to UDP
+        [](const std::span<char>& tcp_data) -> std::optional<std::pair<std::span<char>, asio::ip::udp::endpoint>> {
+            // Create a UDP endpoint to send to
+            asio::ip::udp::endpoint target(
+                asio::ip::address::from_string("127.0.0.1"), 9000);
+            return std::make_pair(tcp_data, target);
+        } >> udp_socket >> 
+        // Adapter from UDP to TCP
+        [](const std::pair<std::span<char>, asio::ip::udp::endpoint>& udp_data) -> std::optional<std::span<char>> {
+            // Extract just the data part
+            return udp_data.first;
+        } >> tcp_socket;
+    
+    // Drive the pipeline in a loop
+    while (true) {
+        // Wait for the pipeline to complete a cycle
+        pipeline <= co_await +pipeline;
+        
+        std::cout << "Pipeline cycle completed" << std::endl;
+    }
+    
+    co_return;
+}
+```
+
 ## Performance
 
 io::manager is designed for high performance, achieving:
