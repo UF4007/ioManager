@@ -1862,10 +1862,9 @@ namespace io
                 struct has_direct_op : std::false_type {};
                 
                 template <typename T>
-                struct has_direct_op<T, std::enable_if_t<has_prot_output_type<T>::value && 
-                                               !is_prot_recv_void<T>::value,
+                struct has_direct_op<T, 
                                 std::void_t<decltype(std::declval<T>().operator>>(
-                                    std::declval<typename T::prot_output_type&>()))>>> 
+                                    std::declval<typename T::prot_output_type&>()))> >
                     : std::true_type {};
                     
                 // Check if T has void operator>>(future&) and prot_output_type is void
@@ -1883,10 +1882,10 @@ namespace io
                 struct has_future_send_op : std::false_type {};
                 
                 template <typename T>
-                struct has_future_send_op<T, std::enable_if_t<has_prot_input_type<T>::value,
+                struct has_future_send_op<T,
                                 std::void_t<decltype(
                                     std::declval<io::future&>() = std::declval<T>().operator<<(
-                                        std::declval<const typename T::prot_input_type&>()))>>> 
+                                        std::declval<const typename T::prot_input_type&>()))> >
                     : std::true_type {};
                     
                 // Check if T has void operator<<(const prot_input_type&)
@@ -1894,10 +1893,16 @@ namespace io
                 struct has_void_send_op : std::false_type {};
                 
                 template <typename T>
-                struct has_void_send_op<T, std::enable_if_t<has_prot_input_type<T>::value,
+                struct has_void_send_op<T, 
                                 std::void_t<decltype(std::declval<T>().operator<<(
-                                    std::declval<const typename T::prot_input_type&>()))>>> 
+                                    std::declval<const typename T::prot_input_type&>()))> >
                     : std::true_type {};
+
+                template <typename T>
+                struct movable_future_with :future_with<T> {
+                    movable_future_with() {}
+                    movable_future_with(movable_future_with&& m) :future_with<T>(){}
+                };
             }
             
             template <typename T>
@@ -1906,8 +1911,7 @@ namespace io
                 static constexpr bool value = 
                     (detail::has_prot_output_type<T>::value && 
                     (detail::has_future_with_op<T>::value || 
-                     detail::has_direct_op<T>::value || 
-                     detail::has_future_op_void_type<T>::value));
+                     detail::has_direct_op<T>::value));
                 
                 // await is true for future_with op or future op with void type
                 static constexpr bool await = 
@@ -1983,7 +1987,7 @@ namespace io
 
             template <typename Front, typename Rear, typename Adaptor>
             struct is_output_prot_gen<pipeline<Front, Rear, Adaptor>> {
-                static constexpr bool value = true;
+                static constexpr bool value = is_output_prot<std::remove_reference_t<Rear>>::value;
                 static constexpr bool await = is_output_prot<std::remove_reference_t<Rear>>::await;
                 static constexpr bool is_pipeline = true;
                 using prot_output_type = typename std::remove_reference_t<Rear>::prot_output_type;
@@ -2008,6 +2012,10 @@ namespace io
             using Front_t = typename Front;
             using Adaptor_t = typename Adaptor;
 
+            inline decltype(auto) start() && {
+                return pipeline_started<std::remove_reference_t<decltype(*this)>, false>(std::move(*this));
+            }
+
             //rear
             template<typename T>
                 requires (
@@ -2022,7 +2030,7 @@ namespace io
                     std::is_lvalue_reference_v<T>,
                     std::add_lvalue_reference_t<std::remove_reference_t<T>>,
                     std::remove_reference_t<T>
-                    >, void>(std::move(*this), std::forward<T>(rear), manager);
+                    >, void>(std::move(*this), std::forward<T>(rear));
             }
 
             //adaptor
@@ -2037,11 +2045,11 @@ namespace io
                     std::is_lvalue_reference_v<T>,
                     std::add_lvalue_reference_t<std::remove_reference_t<T>>,
                     std::remove_reference_t<T>
-                    >>(std::move(*this), std::forward<T>(adaptor), manager);
+                    >>(std::move(*this), std::forward<T>(adaptor));
             }
 
             consteval static size_t pair_sum() {
-                if constexpr (trait::is_pipeline_v<Front>) {
+                if constexpr (trait::is_pipeline_v<std::remove_reference_t<Front>>) {
                     return Front::pair_sum() + 1;
                 }
                 else {
@@ -2049,18 +2057,33 @@ namespace io
                 }
             }
 
-            inline auto awaitable() {
-                std::array<std::reference_wrapper<future>, pair_sum()> futures;
+            pipeline(pipeline&) = delete;
+            void operator=(pipeline&) = delete;
+            
+            // Make pipeline_started a friend class so it can access private members
+            friend class pipeline_started<Front, Rear, Adaptor>;
+            
+        private:
+            inline decltype(auto) awaitable() {
+                std::array<future*, pair_sum()> futures;
                 size_t index = 0;
                 await_get(futures, index);
-                return std::apply([](auto&&... args) {
-                    return future::race(std::forward<decltype(args)>(args)...);
-                    }, futures);
+                if constexpr (pair_sum() == 1)
+                {
+                    future& ref = *futures[0];
+                    return ref;
+                }
+                else
+                {
+                    return std::apply([](auto&&... args) {
+                        return future::race(*args...);
+                        }, futures);
+                }
             }
 
             inline void process(int which) {
                 if (which == this->pair_sum() - 1) {
-                    if constexpr (trait::is_output_prot<Front>::await && trait::is_input_prot<Rear>::await) {
+                    if constexpr (trait::is_output_prot_gen<std::remove_reference_t<Front>>::await && trait::is_input_prot<std::remove_reference_t<Rear>>::await) {
                         if (turn == 1) {
                             if constexpr (!std::is_void_v<Adaptor>) {
                                 auto adapted_data = adaptor(front_future.data);
@@ -2069,7 +2092,12 @@ namespace io
                                     turn = 3;
                                 }
                                 else {
-                                    front >> front_future;
+                                    if constexpr (trait::is_pipeline_v<std::remove_reference_t<Front>>) {
+                                        front.rear >> front_future;
+                                    }
+                                    else {
+                                        front >> front_future;
+                                    }
                                     turn = 1;
                                 }
                             }
@@ -2085,7 +2113,7 @@ namespace io
                             assert(!"pipeline ERROR: unexcepted turn clock!");
                         }
                     }
-                    else if constexpr (trait::is_output_prot<Front>::await) {
+                    else if constexpr (trait::is_output_prot_gen<std::remove_reference_t<Front>>::await) {
                         if (turn == 1) {
                             if constexpr (!std::is_void_v<Adaptor>) {
                                 auto adapted_data = adaptor(front_future.data);
@@ -2102,7 +2130,7 @@ namespace io
                             assert(!"pipeline ERROR: unexcepted turn clock!");
                         }
                     }
-                    else if constexpr (trait::is_input_prot<Rear>::await) {
+                    else if constexpr (trait::is_input_prot<std::remove_reference_t<Rear>>::await) {
                         if (turn == 3) {
                             turn = 2;
                         }
@@ -2112,7 +2140,7 @@ namespace io
                     }
                 }
                 else {
-                    if constexpr (trait::is_pipeline_v<Front>) {
+                    if constexpr (trait::is_pipeline_v<std::remove_reference_t<Front>>) {
                         front.process(which);
                     }
                     else {
@@ -2121,51 +2149,69 @@ namespace io
                 }
             }
 
+            // Move these operators to private to force users to use start()
             inline void operator<=(int which) {
                 return process(which);
             }
 
-            inline auto operator+() {
+            inline decltype(auto) operator+() {
                 return awaitable();
             }
+            
+            pipeline(pipeline&&) = default;
 
-        private:
-            inline void await_get(std::array<std::reference_wrapper<future>, pair_sum()>& futures, size_t& index) {
-                if constexpr (trait::is_pipeline_v<Front>) {
+            template <size_t N>
+            inline void await_get(std::array<future*, N>& futures, size_t& index) {
+                if constexpr (trait::is_pipeline_v<std::remove_reference_t<Front>>) {
                     front.await_get(futures, index);
                 }
-                if constexpr (trait::is_output_prot<Front>::await && trait::is_input_prot<Rear>::await) {
+                if constexpr (trait::is_output_prot_gen<std::remove_reference_t<Front>>::await && trait::is_input_prot<std::remove_reference_t<Rear>>::await) {
                     if (turn == 0) {
-                        front >> front_future;
-                        futures[index++] = std::ref(front_future);
+                        if constexpr (trait::is_pipeline_v<std::remove_reference_t<Front>>) {
+                            front.rear >> front_future;
+                        }
+                        else {
+                            front >> front_future;
+                        }
+                        futures[index++] = std::addressof(front_future);
                         turn = 1;
                     }
                     else if (turn == 1) {
-                        futures[index++] = std::ref(front_future);
+                        futures[index++] = std::addressof(front_future);
                     }
                     else if (turn == 3) {
-                        futures[index++] = std::ref(rear_future);
+                        futures[index++] = std::addressof(rear_future);
                     }
                     else {
                         assert(!"pipeline ERROR: unexcepted turn clock!");
                     }
-                } else if constexpr (trait::is_output_prot<Front>::await) {
+                } else if constexpr (trait::is_output_prot_gen<std::remove_reference_t<Front>>::await) {
                     if (turn == 0) {
-                        front >> front_future;
-                        futures[index++] = std::ref(front_future);
+                        if constexpr (trait::is_pipeline_v<std::remove_reference_t<Front>>) {
+                            front.rear >> front_future;
+                        }
+                        else {
+                            front >> front_future;
+                        }
+                        futures[index++] = std::addressof(front_future);
                         turn = 1;
                     } else if (turn == 1) {
-                        futures[index++] = std::ref(front_future);
+                        futures[index++] = std::addressof(front_future);
                     }
                     else {
                         assert(!"pipeline ERROR: unexcepted turn clock!");
                     }
-                } else if constexpr (trait::is_input_prot<Rear>::await) {
+                } else if constexpr (trait::is_input_prot<std::remove_reference_t<Rear>>::await) {
                     if (turn == 0 || turn == 2) {
                         if constexpr (!std::is_void_v<Adaptor>) {
                             bool adapted = false;
                             while (!adapted) {
-                                front >> front_future;
+                                if constexpr (trait::is_pipeline_v<std::remove_reference_t<Front>>) {
+                                    front.rear >> front_future;
+                                }
+                                else {
+                                    front >> front_future;
+                                }
                                 auto adapted_data = adaptor(front_future);
                                 if (adapted_data) {
                                     rear_future = rear << *adapted_data;
@@ -2174,20 +2220,27 @@ namespace io
                             }
                         }
                         else {
-                            front >> front_future;
+                            if constexpr (trait::is_pipeline_v<std::remove_reference_t<Front>>) {
+                                front.rear >> front_future;
+                            }
+                            else {
+                                front >> front_future;
+                            }
                             rear_future = rear << front_future;
-                            adapted = true;
                         }
                         
-                        futures[index++] = std::ref(rear_future);
+                        futures[index++] = std::addressof(rear_future);
                         turn = 3;
                     }
                     else if (turn == 3) {
-                        futures[index++] = std::ref(rear_future);
+                        futures[index++] = std::addressof(rear_future);
                     }
                     else {
                         assert(!"pipeline ERROR: unexcepted turn clock!");
                     }
+                }
+                else {
+                    static_assert(trait::is_input_prot<std::remove_reference_t<Rear>>::await, "pipeline ERROR: Two Direct protocols (Direct Output Protocol and Direct Input Protocol) cannot be connected to each other in a pipeline segment!");
                 }
             }
 
@@ -2215,16 +2268,12 @@ namespace io
             Rear rear;
             [[no_unique_address]] std::conditional_t<std::is_void_v<Adaptor>, std::monostate, Adaptor> adaptor;
             std::conditional_t<
-                trait::is_output_prot<Front>::await,
-                std::conditional_t<
-                trait::detail::has_future_with_op<Front>::value,
-                future_with<typename Front::prot_output_type>,
-                future
-                >,
-                typename Front::prot_output_type
+                trait::is_output_prot_gen<std::remove_reference_t<Front>>::await,
+                trait::detail::movable_future_with<typename trait::is_output_prot_gen<std::remove_reference_t<Front>>::prot_output_type>,
+                typename trait::is_output_prot_gen<std::remove_reference_t<Front>>::prot_output_type
             > front_future;
             [[no_unique_address]] std::conditional_t<
-                trait::is_input_prot<Rear>::await,
+                trait::is_input_prot<std::remove_reference_t<Rear>>::await,
                 future,
                 std::monostate
             > rear_future;
@@ -2258,9 +2307,9 @@ namespace io
                 requires (
                 std::is_void_v<Rear>&&
                 std::is_void_v<Adaptor>&&
-                trait::is_input_prot<std::remove_reference_t<T>>::value&&
+                trait::is_input_prot<typename std::remove_reference_t<T>>::value&&
                 trait::is_compatible_prot_pair_v<std::remove_reference_t<Front>, std::remove_reference_t<T>>&&
-                std::is_same_v<typename trait::is_output_prot_gen<std::remove_reference_t<Front>>::prot_output_type, typename  std::remove_reference_t<T>::prot_input_type>
+                std::is_same_v<typename trait::is_output_prot_gen<std::remove_reference_t<Front>>::prot_output_type, typename std::remove_reference_t<T>::prot_input_type>
                 )
                 inline auto operator>>(T&& rear)&& {
                 return pipeline<Front,
@@ -2277,6 +2326,7 @@ namespace io
                 std::is_void_v<Rear> &&
                 !std::is_void_v<Adaptor>&&
                 trait::is_input_prot<std::remove_reference_t<T>>::value&&
+                trait::is_compatible_prot_pair_v<std::remove_reference_t<Front>, std::remove_reference_t<T>>&&
                 std::is_same_v<typename trait::is_adaptor<Adaptor, typename trait::is_output_prot_gen<std::remove_reference_t<Front>>::prot_output_type>::result_type, typename std::remove_reference_t<T>::prot_input_type>
                 )
                 inline auto operator>>(T&& rear)&& {
@@ -2304,6 +2354,39 @@ namespace io
             }
             Front front;
             [[no_unique_address]] std::conditional_t<std::is_void_v<Adaptor>, std::monostate, Adaptor> adaptor;
+        };
+
+        // pipeline_started class - represents a started pipeline that cannot be extended
+        template <typename Pipeline, bool individual_coro>
+        class pipeline_started {
+            __IO_INTERNAL_HEADER_PERMISSION;
+        public:
+            // Constructor that takes ownership of a pipeline
+            template <typename Front, typename Rear, typename Adaptor>
+            explicit pipeline_started(pipeline<Front, Rear, Adaptor>&& pipe)
+                : _pipeline(std::move(pipe)) {
+            }
+
+            // Delete copy constructor and assignment
+            pipeline_started(const pipeline_started&) = delete;
+            pipeline_started& operator=(const pipeline_started&) = delete;
+
+            // Delete move constructor and assignment
+            pipeline_started(pipeline_started&&) = delete;
+            pipeline_started& operator=(pipeline_started&&) = delete;
+
+            // Drive the pipeline with a specific index
+            inline void operator<=(int which) {
+                _pipeline.process(which);
+            }
+
+            // Get the awaitable for the pipeline
+            inline decltype(auto) operator+() {
+                return _pipeline.awaitable();
+            }
+
+        private:
+            Pipeline _pipeline;
         };
 
         template <>

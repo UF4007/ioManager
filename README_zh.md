@@ -503,7 +503,7 @@ io::fsm_func<void> use_future_coroutines()
 
 协议分为两种：
 
-#### 输出协议（3种类型）
+#### 输出协议（2种类型）
 
 1. **带Future的输出协议**：
    - 定义了非void的`prot_output_type`，指定它产生的数据类型
@@ -514,11 +514,6 @@ io::fsm_func<void> use_future_coroutines()
    - 定义了非void的`prot_output_type`，指定它产生的数据类型
    - 实现了`operator>>(prot_output_type&)`，用于不带future的直接数据输出
    - 数据直接写入引用
-
-3. **Void类型Future输出协议**：
-   - 将`prot_output_type`定义为`void`
-   - 实现了`operator>>(future&)`，用于不带数据的完成信号
-   - 当只需要完成通知，不需要数据传输时使用
 
 #### 输入协议（2种类型）
 
@@ -571,7 +566,7 @@ struct my_protocol {
 - 最后一个协议必须是输入协议
 - 中间协议必须同时实现两个接口（双向协议）
 - 适配器可用于在不兼容的协议之间转换数据
-- 两个直接协议（直接输出协议和直接输入协议）不能在管线中直接连接
+- 两个直接协议（直接输出协议和直接输入协议）不能连接
 
 #### 创建管线
 
@@ -580,6 +575,8 @@ struct my_protocol {
 ```cpp
 auto pipeline = io::pipeline<>() >> output_protocol >> middle_protocol >> input_protocol;
 ```
+
+若使用左值引用创建管线，则管线内部保存协议的左值引用，协议的生命周期必须长于管线。若调用右值创建管线，则会使用移动构造，移动这个右值到管线内部。
 
 #### 适配器
 

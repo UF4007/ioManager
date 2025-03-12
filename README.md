@@ -526,7 +526,7 @@ io::manager provides a powerful protocol and pipeline system that enables effici
 
 In io::manager, protocols are divided into two main categories with specific subtypes:
 
-#### Output Protocols (3 types)
+#### Output Protocols (2 types)
 
 An Output Protocol is a protocol that can output data, implementing the `operator>>` operation. There are three distinct types:
 
@@ -539,11 +539,6 @@ An Output Protocol is a protocol that can output data, implementing the `operato
    - Defines a non-void `prot_output_type` that specifies the type of data it produces
    - Implements `operator>>(prot_output_type&)` for direct data output without futures
    - Data is directly written to the provided reference without any awaiting
-
-3. **Void-type Future Output Protocol**: 
-   - Defines `prot_output_type` as `void`
-   - Implements `operator>>(future&)` for signaling completion without data
-   - Used when only completion notification is needed, not data transfer
 
 #### Input Protocols (2 types)
 
@@ -589,18 +584,18 @@ struct my_protocol {
 
 ### Pipeline Mechanism
 
-A pipeline is an assembly of protocols that forms a single awaitable entity. The pipeline mechanism works by:
+The pipeline is actually to group all protocols into output-input pairs (pipeline segments), and wait for their futures in a unified coroutine.
 
-1. **Independent Triggering**: Each segment of the pipeline can be independently triggered and processed.
+1. **Independent triggering**: Each segment of the pipeline can be triggered independently and move data without relying on the previous or subsequent segments.
 
-2. **Directionality**: Data flowing in a single direction from the output protocol to the input protocol of a segment of pipeline.
+2. **Directionality**: Data flows from the output protocol to the input protocol in the pipeline segment, with a single direction.
 
 In a pipeline:
 - The first protocol must be an Output Protocol
 - The last protocol must be an Input Protocol
 - Intermediate protocols must implement both interfaces (dual-protocol)
 - Adapters can be used to transform data between incompatible protocols
-- Two Direct protocols (Direct Output Protocol and Direct Input Protocol) cannot be connected to each other in a pipeline
+- Two Direct protocols (Direct Output Protocol and Direct Input Protocol) cannot be connected to each other in a pipeline segment
 
 #### Creating a Pipeline
 
@@ -609,6 +604,8 @@ A pipeline is created using the `>>` operator to chain protocols together:
 ```cpp
 auto pipeline = io::pipeline<>() >> output_protocol >> middle_protocol >> input_protocol;
 ```
+
+When creating a pipeline with lvalue references, the pipeline internally stores references to the protocols, and the protocols' lifetime must exceed that of the pipeline. When creating a pipeline with rvalue references, move construction is used to move the rvalues into the pipeline.
 
 #### Adapters
 

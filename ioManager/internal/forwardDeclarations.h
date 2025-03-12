@@ -53,6 +53,7 @@ struct manager;
 struct yield_t;
 template <typename Front, typename Rear, typename Adaptor>struct pipeline_constructor;
 template <typename Front, typename Rear, typename Adaptor>struct pipeline;
+template <typename Pipeline, bool individual_coro>class pipeline_started;
 template <typename FSM_Index, typename FSM_In, typename FSM_Out>struct rpc;
 namespace sock {
 	struct tcp;

@@ -257,11 +257,15 @@ class lowlevel {
         awaitable_base(fsm_func<T_FSM>::promise_type& _fsm, std::array<awaiter*, sizeof...(Args)> il);
         inline bool await_ready() noexcept { return when_all_count == 0; }
         inline void await_suspend(std::coroutine_handle<> h) {}
-        inline void await_resume() noexcept requires (sizeof...(Args) == 1 && !(std::is_convertible_v<Args&, io::clock&> && ...)) {
-            return ;
+        inline int await_resume() noexcept requires (sizeof...(Args) == 1 && !(std::is_convertible_v<Args&, io::clock&> && ...)) {
+            return 0;
         }
-        inline void await_resume() noexcept requires (sizeof...(Args) == 1 && (std::is_convertible_v<Args&, io::clock&> && ...)) {}
-        inline void await_resume() noexcept requires (sizeof...(Args) >= 2 && status == selector_status::allsettle) {}
+        inline int await_resume() noexcept requires (sizeof...(Args) == 1 && (std::is_convertible_v<Args&, io::clock&> && ...)) {
+            return 0;
+        }
+        inline int await_resume() noexcept requires (sizeof...(Args) >= 2 && status == selector_status::allsettle) {
+            return -1;
+        }
         inline int await_resume() noexcept requires (sizeof...(Args) >= 2 && status != selector_status::allsettle) {
             return who;
         }
