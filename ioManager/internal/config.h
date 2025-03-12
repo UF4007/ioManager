@@ -6,3 +6,7 @@
 #define IO_EXCEPTION_ON 0
 #endif
 #endif
+
+#ifndef IO_USE_ASIO
+#define IO_USE_ASIO 1
+#endif

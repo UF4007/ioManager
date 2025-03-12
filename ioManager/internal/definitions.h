@@ -13,7 +13,7 @@ inline void io::lowlevel::awaiter::queue_in(await_queue* queue)
     this->no_tm.queue_next = this;
     std::swap(this->no_tm.queue_next, queue->queue);
     queue->lock.clear();
-    mngr->suspend_sem.release();
+    mngr->suspend_release();
 }
 
 
@@ -73,7 +73,7 @@ inline bool io::lowlevel::promise_base::resolve_later() {
     {
         awaiter->no_tm.queue_next = awaiter;
         std::swap(awaiter->no_tm.queue_next, awaiter->mngr->resolve_queue_local);
-        awaiter->mngr->suspend_sem.release();
+        awaiter->mngr->suspend_release();
         ret = true;
     }
     awaiter = nullptr;
@@ -86,7 +86,7 @@ inline bool io::lowlevel::promise_base::reject_later(std::error_code ec) {
         this->awaiter->no_tm.err = ec;
         awaiter->no_tm.queue_next = awaiter;
         std::swap(awaiter->no_tm.queue_next, awaiter->mngr->resolve_queue_local);
-        awaiter->mngr->suspend_sem.release();
+        awaiter->mngr->suspend_release();
         ret = true;
     }
     awaiter = nullptr;

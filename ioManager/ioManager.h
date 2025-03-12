@@ -18,6 +18,8 @@ namespace io
     //headonly version distinguish, prevent the linker from mixing differental versions when multi-reference.
     inline namespace v3 {
 
+        // -------------------------------basis structure--------------------------------
+
 #include "internal/forwardDeclarations.h"
         enum class err : uint8_t {
             ok = 0,
@@ -314,6 +316,10 @@ namespace io
             bool is_full = false;
         };
 
+
+
+        // -------------------------------coroutine--------------------------------
+
 #include "internal/lowlevel.h"
 
         //simple awaitable type for finite-state machine
@@ -474,11 +480,8 @@ namespace io
             inline promise() {}
             // the pointer got from function resolve() will be invalid next co_await.
             //  gets nullptr when the promise is invalid.
-            inline T* resolve() {
-                if (static_cast<lowlevel::promise_base*>(this)->resolve())
-                    return ptr;
-                else 
-                    return nullptr;
+            inline void resolve() {
+                static_cast<lowlevel::promise_base*>(this)->resolve();
             }
             inline T* resolve_later() {
                 if (static_cast<lowlevel::promise_base*>(this)->resolve_later())
@@ -1234,6 +1237,9 @@ namespace io
 
         struct get_fsm_t {};
         inline static constexpr get_fsm_t get_fsm;
+        
+        struct yield_t {};
+        inline static constexpr yield_t yield;
 
         template<typename>
         struct is_future_with : std::false_type {};
@@ -1254,8 +1260,18 @@ namespace io
                 inline fsm_func<T> get_return_object() { return { this }; }
                 template<typename U>
                 get_fsm_awaitable await_transform(future_with<U>&&) = delete;
+                template<typename U>
+                void yield_value(U&&) = delete;
                 inline get_fsm_awaitable await_transform(get_fsm_t x) {
                     return get_fsm_awaitable{};
+                }
+                inline lowlevel::awaitable_base<T, lowlevel::selector_status::all, future> await_transform(yield_t) {
+                    future fut;
+                    _fsm.make_future(fut);
+                    fut.awaiter->no_tm.queue_next = _fsm.mngr->resolve_queue_local;
+                    _fsm.mngr->resolve_queue_local = fut.awaiter;
+                    fut.awaiter->coro = (std::function<void(lowlevel::awaiter*)>*)1;
+                    return lowlevel::awaitable_base<T, lowlevel::selector_status::all, future>(*this, { fut.awaiter });
                 }
                 inline lowlevel::awa_awaitable await_transform(awaitable& x) {
                     assert(x.operator bool() == false || !"repeatly co_await in same object!");
@@ -1637,7 +1653,12 @@ namespace io
                 }
 
                 //suspend
+#if IO_USE_ASIO
+                io_ctx.run_until(suspend_next);
+                io_ctx.restart();
+#else
                 bool _nodiscard = suspend_sem.try_acquire_until(suspend_next);
+#endif
             }
             // async co_spawn, coroutine will be run by the caller manager next turn.
             template <typename T_spawn>
@@ -1651,7 +1672,8 @@ namespace io
                 erased_handle = h;
                 pendingTask.push(erased_handle);
                 spinLock_pd.clear(std::memory_order_release);
-                this->suspend_sem.release();
+                
+                this->suspend_release();
 
                 if constexpr (io::is_future_with<T_spawn>::value)
                 {
@@ -1776,21 +1798,528 @@ namespace io
             std::queue<std::coroutine_handle<>> delay_deconstruct;  //coroutines on call chain and needs deconstruct.
 
             std::chrono::nanoseconds suspend_max = std::chrono::nanoseconds(400000000);   //defalut 400ms
+#if IO_USE_ASIO
+            // use run_until in io_context
+            asio::io_context io_ctx{1};
+            asio::executor_work_guard<asio::io_context::executor_type> work_guard = asio::make_work_guard(io_ctx);
+#else
             std::binary_semaphore suspend_sem = std::binary_semaphore(1);
+#endif
+            inline void suspend_release() {
+#if IO_USE_ASIO
+                io_ctx.stop();
+#else
+                this->suspend_sem.release();
+#endif
+            }
 
             io::hive<lowlevel::awaiter> awaiter_hive = io::hive<lowlevel::awaiter>(1000);
         };
 
-        template <typename ...Args>
-        struct pipeline_constructor {
+
+
+        // -------------------------------protocol trait/pipeline--------------------------------
+
+        //protocol traits
+        namespace trait {
+            namespace detail {
+                // Check if T has prot_output_type
+                template <typename T, typename = void>
+                struct has_prot_output_type : std::false_type {};
+                
+                template <typename T>
+                struct has_prot_output_type<T, std::void_t<typename T::prot_output_type>> : std::true_type {};
+                
+                // Check if T has prot_input_type
+                template <typename T, typename = void>
+                struct has_prot_input_type : std::false_type {};
+                
+                template <typename T>
+                struct has_prot_input_type<T, std::void_t<typename T::prot_input_type>> : std::true_type {};
+                
+                // Check if T::prot_output_type is void
+                template <typename T, typename = void>
+                struct is_prot_recv_void : std::false_type {};
+                
+                template <typename T>
+                struct is_prot_recv_void<T, std::enable_if_t<has_prot_output_type<T>::value && 
+                                                    std::is_same_v<typename T::prot_output_type, void>>> 
+                    : std::true_type {};
+                    
+                // Check if T has void operator>>(future_with<prot_output_type>&)
+                template <typename T, typename = void>
+                struct has_future_with_op : std::false_type {};
+                
+                template <typename T>
+                struct has_future_with_op<T, std::enable_if_t<has_prot_output_type<T>::value && 
+                                                     !is_prot_recv_void<T>::value,
+                                  std::void_t<decltype(std::declval<T>().operator>>(
+                                      std::declval<future_with<typename T::prot_output_type>&>()))>>> 
+                    : std::true_type {};
+                    
+                // Check if T has void operator>>(prot_output_type&)
+                template <typename T, typename = void>
+                struct has_direct_op : std::false_type {};
+                
+                template <typename T>
+                struct has_direct_op<T, std::enable_if_t<has_prot_output_type<T>::value && 
+                                               !is_prot_recv_void<T>::value,
+                                std::void_t<decltype(std::declval<T>().operator>>(
+                                    std::declval<typename T::prot_output_type&>()))>>> 
+                    : std::true_type {};
+                    
+                // Check if T has void operator>>(future&) and prot_output_type is void
+                template <typename T, typename = void>
+                struct has_future_op_void_type : std::false_type {};
+                
+                template <typename T>
+                struct has_future_op_void_type<T, std::enable_if_t<is_prot_recv_void<T>::value,
+                                     std::void_t<decltype(std::declval<T>().operator>>(
+                                         std::declval<future&>()))>>> 
+                    : std::true_type {};
+                    
+                // Check if T has U operator<<(const prot_input_type&) where U is convertible to io::future
+                template <typename T, typename = void>
+                struct has_future_send_op : std::false_type {};
+                
+                template <typename T>
+                struct has_future_send_op<T, std::enable_if_t<has_prot_input_type<T>::value,
+                                std::void_t<decltype(
+                                    std::declval<io::future&>() = std::declval<T>().operator<<(
+                                        std::declval<const typename T::prot_input_type&>()))>>> 
+                    : std::true_type {};
+                    
+                // Check if T has void operator<<(const prot_input_type&)
+                template <typename T, typename = void>
+                struct has_void_send_op : std::false_type {};
+                
+                template <typename T>
+                struct has_void_send_op<T, std::enable_if_t<has_prot_input_type<T>::value,
+                                std::void_t<decltype(std::declval<T>().operator<<(
+                                    std::declval<const typename T::prot_input_type&>()))>>> 
+                    : std::true_type {};
+            }
+            
+            template <typename T>
+            struct is_output_prot {
+                // is typename T a receive protocol
+                static constexpr bool value = 
+                    (detail::has_prot_output_type<T>::value && 
+                    (detail::has_future_with_op<T>::value || 
+                     detail::has_direct_op<T>::value || 
+                     detail::has_future_op_void_type<T>::value));
+                
+                // await is true for future_with op or future op with void type
+                static constexpr bool await = 
+                    (detail::has_future_with_op<T>::value || 
+                     detail::has_future_op_void_type<T>::value);
+            };
+            
+            template <typename T>
+            struct is_input_prot {
+                // is typename T a send protocol
+                static constexpr bool value = 
+                    (detail::has_prot_input_type<T>::value && 
+                    (detail::has_future_send_op<T>::value || 
+                     detail::has_void_send_op<T>::value));
+                
+                // await is true for future-returning operator<< and false for void-returning operator<<
+                static constexpr bool await = detail::has_future_send_op<T>::value;
+            };
+
+            template <typename T>
+            inline constexpr bool is_dualput_v = is_output_prot<T>::value && is_input_prot<T>::value;
+
+            template <typename F, typename T, typename = void> struct is_adaptor : std::false_type {
+                using result_type = void;
+            };
+
+            template <typename F, typename T>
+            struct is_adaptor<F, T, std::void_t<decltype(std::declval<F>()(std::declval<const T&>()))>>
+            {
+            private:
+                using ReturnType = decltype(std::declval<F>()(std::declval<const T&>()));
+
+                template <typename R>
+                struct is_optional : std::false_type {};
+
+                template <typename U>
+                struct is_optional<std::optional<U>> : std::true_type {
+                    using value_type = U;
+                };
+
+            public:
+                static constexpr bool value = is_optional<ReturnType>::value;
+
+                using result_type = typename std::conditional_t<
+                    value,
+                    is_optional<ReturnType>,
+                    std::false_type
+                >::value_type;
+            };
+
+            template <typename T, typename = void>
+            inline constexpr bool is_pipeline_v = false;
+
+            template <typename T>
+            inline constexpr bool is_pipeline_v<T,
+                std::void_t<
+                typename T::Front_t,
+                typename T::Rear_t,
+                typename T::Adaptor_t,
+                std::enable_if_t<std::is_same_v<T, pipeline<
+                typename T::Front_t,
+                typename T::Rear_t,
+                typename T::Adaptor_t>>>
+                >> = true;
+
+            template <typename T>
+            struct is_output_prot_gen {
+                static constexpr bool value = is_output_prot<T>::value;
+                static constexpr bool await = is_output_prot<T>::await;
+                static constexpr bool is_pipeline = false;
+                using prot_output_type = typename T::prot_output_type;
+            };
+
+            template <typename Front, typename Rear, typename Adaptor>
+            struct is_output_prot_gen<pipeline<Front, Rear, Adaptor>> {
+                static constexpr bool value = true;
+                static constexpr bool await = is_output_prot<std::remove_reference_t<Rear>>::await;
+                static constexpr bool is_pipeline = true;
+                using prot_output_type = typename std::remove_reference_t<Rear>::prot_output_type;
+            };
+
+            template <typename T1, typename T2>
+            struct is_compatible_prot_pair {
+                static constexpr bool value = 
+                    is_output_prot_gen<T1>::value &&
+                    is_input_prot<T2>::value && 
+                    (is_output_prot_gen<T1>::await || is_input_prot<T2>::await);
+            };
+
+            template <typename T1, typename T2>
+            inline constexpr bool is_compatible_prot_pair_v = is_compatible_prot_pair<T1, T2>::value;
         };
 
-        template <typename ...Args>
+        template <typename Front = void, typename Rear = void, typename Adaptor = void>
         struct pipeline {
+            __IO_INTERNAL_HEADER_PERMISSION;
+            using Rear_t = typename Rear;
+            using Front_t = typename Front;
+            using Adaptor_t = typename Adaptor;
+
+            //rear
+            template<typename T>
+                requires (
+                trait::is_output_prot<std::remove_reference_t<Rear>>::value&&
+                trait::is_input_prot<std::remove_reference_t<T>>::value&&
+                trait::is_compatible_prot_pair_v<std::remove_reference_t<Rear>, std::remove_reference_t<T>>&&
+                std::is_same_v<typename std::remove_reference_t<Rear>::prot_output_type, typename  std::remove_reference_t<T>::prot_input_type>
+                )
+                inline auto operator>>(T&& rear)&& {
+                return pipeline<std::remove_reference_t<decltype(*this)>,
+                    std::conditional_t<
+                    std::is_lvalue_reference_v<T>,
+                    std::add_lvalue_reference_t<std::remove_reference_t<T>>,
+                    std::remove_reference_t<T>
+                    >, void>(std::move(*this), std::forward<T>(rear), manager);
+            }
+
+            //adaptor
+            template<typename T>
+                requires (
+                trait::is_output_prot<std::remove_reference_t<Rear>>::value&&
+                trait::is_adaptor<T, typename std::remove_reference_t<Rear>::prot_output_type>::value
+                )
+                inline auto operator>>(T&& adaptor)&& {
+                return pipeline_constructor<std::remove_reference_t<decltype(*this)>, void,
+                    std::conditional_t<
+                    std::is_lvalue_reference_v<T>,
+                    std::add_lvalue_reference_t<std::remove_reference_t<T>>,
+                    std::remove_reference_t<T>
+                    >>(std::move(*this), std::forward<T>(adaptor), manager);
+            }
+
+            consteval static size_t pair_sum() {
+                if constexpr (trait::is_pipeline_v<Front>) {
+                    return Front::pair_sum() + 1;
+                }
+                else {
+                    return 1;
+                }
+            }
+
+            inline auto awaitable() {
+                std::array<std::reference_wrapper<future>, pair_sum()> futures;
+                size_t index = 0;
+                await_get(futures, index);
+                return std::apply([](auto&&... args) {
+                    return future::race(std::forward<decltype(args)>(args)...);
+                    }, futures);
+            }
+
+            inline void process(int which) {
+                if (which == this->pair_sum() - 1) {
+                    if constexpr (trait::is_output_prot<Front>::await && trait::is_input_prot<Rear>::await) {
+                        if (turn == 1) {
+                            if constexpr (!std::is_void_v<Adaptor>) {
+                                auto adapted_data = adaptor(front_future.data);
+                                if (adapted_data) {
+                                    rear_future = rear << *adapted_data;
+                                    turn = 3;
+                                }
+                                else {
+                                    front >> front_future;
+                                    turn = 1;
+                                }
+                            }
+                            else {
+                                rear_future = rear << front_future.data;
+                                turn = 3;
+                            }
+                        }
+                        else if (turn == 3) {
+                            turn = 0;
+                        }
+                        else {
+                            assert(!"pipeline ERROR: unexcepted turn clock!");
+                        }
+                    }
+                    else if constexpr (trait::is_output_prot<Front>::await) {
+                        if (turn == 1) {
+                            if constexpr (!std::is_void_v<Adaptor>) {
+                                auto adapted_data = adaptor(front_future.data);
+                                if (adapted_data) {
+                                    rear << *adapted_data;
+                                }
+                            }
+                            else {
+                                rear << front_future.data;
+                            }
+                            turn = 0;
+                        }
+                        else {
+                            assert(!"pipeline ERROR: unexcepted turn clock!");
+                        }
+                    }
+                    else if constexpr (trait::is_input_prot<Rear>::await) {
+                        if (turn == 3) {
+                            turn = 2;
+                        }
+                        else {
+                            assert(!"pipeline ERROR: unexcepted turn clock!");
+                        }
+                    }
+                }
+                else {
+                    if constexpr (trait::is_pipeline_v<Front>) {
+                        front.process(which);
+                    }
+                    else {
+                        assert(!"pipeline ERROR: unexcepted pipeline num!");
+                    }
+                }
+            }
+
+            inline void operator<=(int which) {
+                return process(which);
+            }
+
+            inline auto operator+() {
+                return awaitable();
+            }
+
+        private:
+            inline void await_get(std::array<std::reference_wrapper<future>, pair_sum()>& futures, size_t& index) {
+                if constexpr (trait::is_pipeline_v<Front>) {
+                    front.await_get(futures, index);
+                }
+                if constexpr (trait::is_output_prot<Front>::await && trait::is_input_prot<Rear>::await) {
+                    if (turn == 0) {
+                        front >> front_future;
+                        futures[index++] = std::ref(front_future);
+                        turn = 1;
+                    }
+                    else if (turn == 1) {
+                        futures[index++] = std::ref(front_future);
+                    }
+                    else if (turn == 3) {
+                        futures[index++] = std::ref(rear_future);
+                    }
+                    else {
+                        assert(!"pipeline ERROR: unexcepted turn clock!");
+                    }
+                } else if constexpr (trait::is_output_prot<Front>::await) {
+                    if (turn == 0) {
+                        front >> front_future;
+                        futures[index++] = std::ref(front_future);
+                        turn = 1;
+                    } else if (turn == 1) {
+                        futures[index++] = std::ref(front_future);
+                    }
+                    else {
+                        assert(!"pipeline ERROR: unexcepted turn clock!");
+                    }
+                } else if constexpr (trait::is_input_prot<Rear>::await) {
+                    if (turn == 0 || turn == 2) {
+                        if constexpr (!std::is_void_v<Adaptor>) {
+                            bool adapted = false;
+                            while (!adapted) {
+                                front >> front_future;
+                                auto adapted_data = adaptor(front_future);
+                                if (adapted_data) {
+                                    rear_future = rear << *adapted_data;
+                                    adapted = true;
+                                }
+                            }
+                        }
+                        else {
+                            front >> front_future;
+                            rear_future = rear << front_future;
+                            adapted = true;
+                        }
+                        
+                        futures[index++] = std::ref(rear_future);
+                        turn = 3;
+                    }
+                    else if (turn == 3) {
+                        futures[index++] = std::ref(rear_future);
+                    }
+                    else {
+                        assert(!"pipeline ERROR: unexcepted turn clock!");
+                    }
+                }
+            }
+
+            // Constructor for pipeline with front and rear protocols (no adaptor)
+            inline pipeline(Front&& f, Rear&& r)
+            : front(std::forward<Front>(f))
+                , rear(std::forward<Rear>(r)) {
+            }
+
+            // Constructor for pipeline with front, rear and adaptor
+            template <typename U = Adaptor>
+            inline pipeline(Front&& f, Rear&& r, std::enable_if<!std::is_void_v<U>, U>::type&& a)
+            : front(std::forward<Front>(f))
+                , rear(std::forward<Rear>(r))
+                , adaptor(std::forward<U>(a)) {
+            }
+
+            template <typename U = Adaptor>
+            inline pipeline(Front&& f, Rear&& r, int a)
+            : front(std::forward<Front>(f))
+                , rear(std::forward<Rear>(r)) {
+            }
+
+            Front front;
+            Rear rear;
+            [[no_unique_address]] std::conditional_t<std::is_void_v<Adaptor>, std::monostate, Adaptor> adaptor;
+            std::conditional_t<
+                trait::is_output_prot<Front>::await,
+                std::conditional_t<
+                trait::detail::has_future_with_op<Front>::value,
+                future_with<typename Front::prot_output_type>,
+                future
+                >,
+                typename Front::prot_output_type
+            > front_future;
+            [[no_unique_address]] std::conditional_t<
+                trait::is_input_prot<Rear>::await,
+                future,
+                std::monostate
+            > rear_future;
+            int turn = 0; //0 front before operator<<,1 front after operator<<, 2 rear before operator>>, 3 rear after operator>>
         };
 
-        template <typename Front, typename Rear, typename ...Adaptors>
-        struct pipeline_base {
+        template <typename Front, typename Rear, typename Adaptor>
+        struct pipeline_constructor {
+            __IO_INTERNAL_HEADER_PERMISSION;
+            using Rear_t = typename Rear;
+            using Front_t = typename Front;
+            using Adaptor_t = typename Adaptor;
+            // Continue construction with adaptor
+            template<typename T>
+                requires (
+            std::is_void_v<Rear>&&
+                std::is_void_v<Adaptor>&&
+                trait::is_adaptor<T, typename trait::is_output_prot_gen<std::remove_reference_t<Front>>::prot_output_type>::value
+                )
+                inline auto operator>>(T&& adaptor)&& {
+                return pipeline_constructor<Front, void,
+                    std::conditional_t<
+                    std::is_lvalue_reference_v<T>,
+                    std::add_lvalue_reference_t<std::remove_reference_t<T>>,
+                    std::remove_reference_t<T>
+                    >>(std::forward<Front>(front), std::forward<T>(adaptor));
+            }
+
+            // Create final pipeline with input protocol
+            template<typename T>
+                requires (
+                std::is_void_v<Rear>&&
+                std::is_void_v<Adaptor>&&
+                trait::is_input_prot<std::remove_reference_t<T>>::value&&
+                trait::is_compatible_prot_pair_v<std::remove_reference_t<Front>, std::remove_reference_t<T>>&&
+                std::is_same_v<typename trait::is_output_prot_gen<std::remove_reference_t<Front>>::prot_output_type, typename  std::remove_reference_t<T>::prot_input_type>
+                )
+                inline auto operator>>(T&& rear)&& {
+                return pipeline<Front,
+                    std::conditional_t<
+                    std::is_lvalue_reference_v<T>,
+                    std::add_lvalue_reference_t<std::remove_reference_t<T>>,
+                    std::remove_reference_t<T>
+                    >, Adaptor>(std::forward<Front>(front), std::forward<T>(rear));
+            }
+
+            // Create final pipeline with input protocol and adaptor
+            template<typename T>
+                requires (
+                std::is_void_v<Rear> &&
+                !std::is_void_v<Adaptor>&&
+                trait::is_input_prot<std::remove_reference_t<T>>::value&&
+                std::is_same_v<typename trait::is_adaptor<Adaptor, typename trait::is_output_prot_gen<std::remove_reference_t<Front>>::prot_output_type>::result_type, typename std::remove_reference_t<T>::prot_input_type>
+                )
+                inline auto operator>>(T&& rear)&& {
+                return pipeline<Front,
+                    std::conditional_t<
+                    std::is_lvalue_reference_v<T>,
+                    std::add_lvalue_reference_t<std::remove_reference_t<T>>,
+                    std::remove_reference_t<T>
+                    >, Adaptor>(std::forward<Front>(front), std::forward<T>(rear), std::forward<Adaptor>(adaptor));
+            }
+
+        private:
+            inline pipeline_constructor(Front&& f)
+                : front(std::forward<Front>(f)) {
+            }
+
+            template <typename U = Adaptor>
+            inline pipeline_constructor(Front&& f, std::enable_if<!std::is_void_v<U>, U>::type&& a)
+                : front(std::forward<Front>(f)), adaptor(std::forward<U>(a)) {
+            }
+
+            template <typename U = Adaptor>
+            inline pipeline_constructor(Front&& f, int a)   //never use
+                : front(std::forward<Front>(f)) {
+            }
+            Front front;
+            [[no_unique_address]] std::conditional_t<std::is_void_v<Adaptor>, std::monostate, Adaptor> adaptor;
+        };
+
+        template <>
+        struct pipeline<void, void, void> {
+            __IO_INTERNAL_HEADER_PERMISSION;
+            // Chain operator for starting the pipeline - requires output protocol
+            template<typename T>
+                requires trait::is_output_prot<std::remove_reference_t<T>>::value
+            inline auto operator>>(T&& front) && {
+                return pipeline_constructor<std::conditional_t<
+                    std::is_lvalue_reference_v<T>,
+                    std::add_lvalue_reference_t<std::remove_reference_t<T>>,
+                    std::remove_reference_t<T>
+                >, void, void>(std::forward<T>(front));
+            }
+            inline pipeline() {}
         };
 
         template <typename FSM_Index = void, typename FSM_In = void, typename FSM_Out = void>
@@ -1798,7 +2327,7 @@ namespace io
 
         };
 
-        //hepler struct of rpc
+        //hepler struct of rpc<>::def.
         template <>
         struct rpc<void, void, void> {
             rpc() = delete;
@@ -1808,84 +2337,117 @@ namespace io
 
 
 
-        // -------------------------------channel/protocol--------------------------------
+        // -------------------------------socket/protocol impl--------------------------------
 
-        namespace tcp {
-            struct socket {
+        // hardware/system io socket
+        namespace sock {
+            struct tcp {
                 __IO_INTERNAL_HEADER_PERMISSION;
-                inline socket() {}
-
+                friend class std::optional<tcp>;
+                using prot_output_type = std::span<char>;
+                using prot_input_type = std::span<char>;
+                static constexpr size_t default_buffer_size = 1024 * 16;
                 template <typename T_FSM>
-                inline async_future& wait_read(fsm<T_FSM>& state_machine, size_t size = BUF_SIZE) {
-                    auto status = recv_future.status();
-                    if (status == io::future::status_t::null ||
-                        status == io::future::status_t::fullfilled ||
-                        status == io::future::status_t::rejected)
-                    {
-                        async_promise prom = state_machine.make_future(recv_future);
-                        recv_buf->resize(size);
-                        asio_sock.async_read_some(asio::buffer(recv_buf->data(), recv_buf->size()),
-                                                  [pr = std::move(prom),
-                                                   recv_buf = this->recv_buf](const asio::error_code &ec, size_t size) mutable
-                                                  {
-                                                      recv_buf->resize(size);
-                                                      if (ec)
-                                                          pr.reject(ec);
-                                                      else
-                                                          pr.resolve();
-                                                  });
+                inline tcp(fsm<T_FSM>& state_machine) : manager(state_machine.getManager()), asio_sock(manager->io_ctx) {
+                    buffer.resize(default_buffer_size);
+                }
+
+                inline void setBufSize(size_t size) {
+                    buffer.resize(size);
+                }
+
+                //receive function
+                inline void operator >>(future_with<std::span<char>>& fut) {
+                    promise<std::span<char>> prom = manager->make_future(fut, &fut.data);
+                    if (!asio_sock.is_open()) {
+                        prom.reject_later(std::make_error_code(std::errc::not_connected));
+                        return;
                     }
-                    return recv_future;
-                }
 
-                inline std::span<char> read() {
-                    return std::span<char>(*recv_buf.get());
-                }
+                    asio_sock.async_wait(asio::ip::tcp::socket::wait_read,
+                        [this, prom = std::move(prom)](const std::error_code& ec) mutable {
+                            if (ec) {
+                                prom.reject_later(ec);
+                                return;
+                            }
 
-                template <typename T_FSM>
-                inline async_future wait_send(fsm<T_FSM>& state_machine, std::span<const char> span) {
-                    if (send_buf.use_count() != 1)
-                        send_buf = std::make_shared<std::string>();
-                    async_future fut;
-                    async_promise prom = state_machine.make_future(fut);
-                    send_buf->resize(span.size());
-                    std::memcpy(send_buf->data(), span.data(), span.size());
-                    asio_sock.async_write_some(asio::buffer(*send_buf.get()),
-                        [
-                            pr = std::move(prom),
-                                send_buf = this->send_buf
-                        ](const asio::error_code& ec, size_t size)mutable {
-                            if (ec)
-                                pr.reject(ec);
-                            else
-                                pr.resolve();
+                            std::error_code read_ec;
+                            size_t bytes_read = asio_sock.read_some(asio::buffer(buffer), read_ec);
+                            if (read_ec) {
+                                prom.reject_later(read_ec);
+                                return;
+                            }
+
+                            auto ptr = prom.resolve_later();
+                            if (ptr)
+                            {
+                                *ptr = std::span<char>(buffer.data(), bytes_read);
+                            }
                         });
-                            return fut;
                 }
 
-                template <typename T_FSM>
-                inline async_future connect(fsm<T_FSM>& state_machine,
-                    const asio::ip::tcp::endpoint& endpoint) {
-                    async_future fut;
-                    async_promise prom = state_machine.make_future(fut);
+                //send function
+                inline future operator <<(const std::span<char>& span) {
+                    future fut;
+                    promise<> prom = manager->make_future(fut);
+                    if (!asio_sock.is_open()) {
+                        prom.reject_later(std::make_error_code(std::errc::not_connected));
+                        return fut;
+                    }
+
+                    // Try immediate non-blocking send first
+                    std::error_code write_ec;
+                    size_t bytes_written = asio_sock.write_some(asio::buffer(span.data(), span.size()), write_ec);
+                    
+                    // Check if we wrote everything successfully
+                    if (!write_ec && bytes_written == span.size()) {
+                        prom.resolve_later();
+                        return fut;
+                    }
+                    
+                    // If we got an error other than would_block, reject
+                    if (write_ec && write_ec != asio::error::would_block) {
+                        prom.reject_later(write_ec);
+                        return fut;
+                    }
+                    
+                    // Create a copy of remaining data using unique_ptr
+                    auto remaining_data = std::make_unique<std::string>(
+                        span.data() + bytes_written, 
+                        span.size() - bytes_written
+                    );
+                    
+                    // Use helper function to handle recursive sending
+                    async_send_remaining(std::move(remaining_data), std::move(prom));
+                    
+                    return fut;
+                }
+
+                inline future connect(const asio::ip::tcp::endpoint& endpoint) {
+                    future fut;
+                    promise<> prom = manager->make_future(fut);
+
                     asio_sock.async_connect(endpoint,
-                        [pr = std::move(prom)](const asio::error_code& ec)mutable {
-                            if (ec)
-                                pr.reject(ec);
-                            else
-                                pr.resolve();
+                        [this, prom = std::move(prom)](const std::error_code& ec) mutable {
+                            if (ec) {
+                                prom.reject_later(ec);
+                            }
+                            else {
+                                // Set non-blocking mode after successful connection
+                                std::error_code nb_ec;
+                                asio_sock.non_blocking(true, nb_ec);
+                                prom.resolve_later();
+                            }
                         });
+
                     return fut;
                 }
 
                 inline void close() {
-                    asio::error_code ec;
-                    asio_sock.close(ec);
-                }
-
-                inline auto readGetErr()
-                {
-                    return recv_future.getErr();
+                    if (asio_sock.is_open()) {
+                        std::error_code ec;
+                        asio_sock.close(ec);
+                    }
                 }
 
                 IO_MANAGER_FORWARD_FUNC(asio_sock, native_handle);
@@ -1893,300 +2455,363 @@ namespace io
                 IO_MANAGER_FORWARD_FUNC(asio_sock, remote_endpoint);
                 IO_MANAGER_FORWARD_FUNC(asio_sock, local_endpoint);
                 IO_MANAGER_FORWARD_FUNC(asio_sock, available);
-
+                inline tcp(asio::ip::tcp::socket&& sock, size_t size, io::manager* mngr) :manager(mngr), asio_sock(std::move(sock)) {
+                    buffer.resize(size);
+                }
             private:
-                inline socket(asio::ip::tcp::socket&& sock) {
-                    asio_sock = std::move(sock);
-                    recv_buf = std::make_shared<std::string>();
-                    send_buf = std::make_shared<std::string>();
-                }
-                asio::ip::tcp::socket asio_sock = asio::ip::tcp::socket(lowlevel::asioManager);
-                static constexpr size_t BUF_SIZE = 10240;
-                std::shared_ptr<std::string> recv_buf = std::make_shared<std::string>();
-                std::shared_ptr<std::string> send_buf = std::make_shared<std::string>();
-                io::async_future recv_future;
-            };
-
-            struct acceptor {
-                __IO_INTERNAL_HEADER_PERMISSION;
-                inline acceptor(uint16_t port) {
-                    asio::error_code ec;
-                    asio_accp.open(asio::ip::tcp::v4(), ec);
-                    if (!ec) {
-                        asio_accp.bind(asio::ip::tcp::endpoint(asio::ip::tcp::v4(), port), ec);
-                        if (!ec) {
-                            asio_accp.listen(asio::socket_base::max_listen_connections, ec);
-                        }
-                    }
-                }
-                inline acceptor() {}
-
-                template <typename T_FSM>
-                inline async_future wait_accept(fsm<T_FSM>& state_machine) {
-                    async_future fut;
-                    async_promise prom = state_machine.make_future(fut);
-                    asio_accp.async_accept(
-                        [pr = std::move(prom),
-                        accptr = accepted_ptr
-                        ]
-                        (const asio::error_code& ec, asio::ip::tcp::socket sock) mutable {
-                            if (!ec)
-                            {
-                                if (accptr->ptr.has_value() == false)
-                                {
-                                    accptr->ptr.emplace(std::move(sock));
-                                    pr.resolve();
-                                    return;
-                                }
-                            }
-                            pr.reject(ec);
-                        });
-                    return fut;
-                }
-
-                inline bool accept(socket& sock) {
-                    if (accepted_ptr->ptr.has_value())
-                    {
-                        sock = std::move(accepted_ptr->ptr.value());
-                        accepted_ptr->ptr.reset();
-                        return true;
-                    }
-                    return false;
-                }
-
-                inline void close() {
-                    asio::error_code ec;
-                    asio_accp.close(ec);
-                }
-
-                IO_MANAGER_FORWARD_FUNC(asio_accp, open);
-                IO_MANAGER_FORWARD_FUNC(asio_accp, bind);
-                IO_MANAGER_FORWARD_FUNC(asio_accp, listen);
-                IO_MANAGER_FORWARD_FUNC(asio_accp, is_open);
-                IO_MANAGER_FORWARD_FUNC(asio_accp, local_endpoint);
-
-            private:
-                struct shared_struct {
-                    std::optional<asio::ip::tcp::socket> ptr;
-                };
-                std::shared_ptr<shared_struct> accepted_ptr = std::make_shared<shared_struct>();
-                asio::ip::tcp::acceptor asio_accp = asio::ip::tcp::acceptor(lowlevel::asioManager);
-            };
-        };
-
-        namespace udp {
-            struct socket {
-                __IO_INTERNAL_HEADER_PERMISSION;
-
-                inline socket() {}
-
-                inline socket(uint16_t port) {
-                    asio::error_code ec;
-                    asio_sock.open(asio::ip::udp::v4(), ec);
-                    if (!ec) {
-                        asio_sock.bind(asio::ip::udp::endpoint(asio::ip::udp::v4(), port), ec);
-                    }
-                }
-
-                template <typename T_FSM>
-                inline async_future& wait_read(fsm<T_FSM>& state_machine, size_t size = BUF_SIZE)
-                {
-                    auto status = recv_future.status();
-                    if (status == io::future::status_t::null ||
-                        status == io::future::status_t::fullfilled||
-                        status == io::future::status_t::rejected)
-                    {
-                        async_promise prom = state_machine.make_future(recv_future);
-
-                        if (size > recv_buf->buf.size())
-                        {
-                            recv_buf->buf.resize(size);
-                        }
-
-                        asio_sock.async_receive_from(
-                            asio::buffer(recv_buf->buf.data(), size),
-                            recv_buf->endpoint,
-                            [pr = std::move(prom), recv_buf = this->recv_buf](const asio::error_code &ec, size_t bytes_received) mutable
-                            {
-                                if (ec)
-                                {
-                                    pr.reject(ec);
-                                }
-                                else
-                                {
-                                    recv_buf->buf.resize(bytes_received);
-                                    pr.resolve();
-                                }
-                            });
-                    }
-                    return recv_future;
-                }
-
-                inline std::tuple<std::span<const char>, asio::ip::udp::endpoint> read() const {
-                    return std::make_tuple(std::span<const char>(recv_buf->buf.data(), recv_buf->buf.size()), recv_buf->endpoint);
-                }
-
-                template <typename T_FSM>
-                inline async_future wait_send(fsm<T_FSM>& state_machine,
-                    std::span<const char> data,
-                    const asio::ip::udp::endpoint& target) {
-                    if (send_buf.use_count() != 1)
-                        send_buf = std::make_shared<data_with_endpoint>();
-                    async_future fut;
-                    async_promise prom = state_machine.make_future(fut);
-
-                    if (data.size() > send_buf->buf.size()) {
-                        send_buf->buf.resize(data.size());
-                    }
-
-                    send_buf->endpoint = target;
-
-                    std::memcpy(send_buf->buf.data(), data.data(), data.size());
-
-                    asio_sock.async_send_to(
-                        asio::buffer(send_buf->buf.data(), data.size()),
-                        send_buf->endpoint,
-                        [pr = std::move(prom), send_buf = this->send_buf]
-                        (const asio::error_code& ec, size_t) mutable {
+                // Helper function to recursively send remaining data
+                void async_send_remaining(std::unique_ptr<std::string> data, promise<> prom) {
+                    asio_sock.async_write_some(
+                        asio::buffer(data->data(), data->size()),
+                        [this, data = std::move(data), prom = std::move(prom)]
+                        (const std::error_code& ec, size_t bytes_sent) mutable {
                             if (ec) {
-                                pr.reject(ec);
+                                prom.reject_later(ec);
+                                return;
+                            }
+
+                            if (bytes_sent < data->size()) {
+                                // Still data left to send - update the buffer and recurse
+                                data->erase(0, bytes_sent);
+                                async_send_remaining(std::move(data), std::move(prom));
                             }
                             else {
-                                pr.resolve();
+                                // All data sent successfully
+                                prom.resolve_later();
                             }
                         });
-                    return fut;
+                }
+                io::manager* manager = nullptr;
+                std::string buffer;
+                asio::ip::tcp::socket asio_sock;
+            };
+
+            struct tcp_accp {
+                __IO_INTERNAL_HEADER_PERMISSION;
+                using prot_output_type = std::optional<tcp>;
+                template <typename T_FSM>
+                inline tcp_accp(fsm<T_FSM>& state_machine) : manager(state_machine.getManager()), acceptor(manager->io_ctx), sock(manager->io_ctx) {}
+
+                inline void setBufSize(size_t size) {
+                    buffer_size = size;
+                }
+
+                inline bool bind_and_listen(const asio::ip::tcp::endpoint& endpoint, int backlog = 10) {
+                    std::error_code ec;
+                    acceptor.open(endpoint.protocol(), ec);
+                    if (ec) {
+                        return false;
+                    }
+
+                    acceptor.set_option(asio::ip::tcp::acceptor::reuse_address(true), ec);
+                    if (ec) {
+                        return false;
+                    }
+
+                    acceptor.bind(endpoint, ec);
+                    if (ec) {
+                        return false;
+                    }
+
+                    acceptor.listen(backlog, ec);
+                    if (ec) {
+                        return false;
+                    }
+                    
+                    return !ec;
+                }
+
+                inline void operator >>(future_with<std::optional<tcp>>& fut) {
+                    promise<std::optional<tcp>> prom = manager->make_future(fut, &fut.data);
+                    if (!acceptor.is_open()) {
+                        fut.getPromise().reject_later(std::make_error_code(std::errc::not_connected));
+                        return;
+                    }
+
+                    acceptor.async_accept(sock,
+                        [this, prom = std::move(prom)](const std::error_code& ec) mutable {
+                            if (ec) {
+                                prom.reject_later(ec);
+                                return;
+                            }
+
+                            // Set the accepted socket to non-blocking
+                            std::error_code nb_ec;
+                            sock.non_blocking(true, nb_ec);
+                            if (nb_ec) {
+                                prom.reject_later(nb_ec);
+                                return;
+                            }
+
+                            auto ptr = prom.resolve_later();
+                            if (ptr)
+                            {
+                                ptr->emplace(std::move(sock), buffer_size, manager);
+                            }
+                            else
+                            {
+                                std::error_code ec;
+                                sock.close(ec);
+                            }
+                        });
                 }
 
                 inline void close() {
-                    asio::error_code ec;
-                    asio_sock.close(ec);
+                    if (acceptor.is_open()) {
+                        std::error_code ec;
+                        acceptor.close(ec);
+                    }
                 }
 
-                inline auto readGetErr() {
-                    return recv_future.getErr();
+                IO_MANAGER_FORWARD_FUNC(acceptor, is_open);
+                IO_MANAGER_FORWARD_FUNC(acceptor, local_endpoint);
+
+            private:
+                io::manager* manager = nullptr;
+                size_t buffer_size = tcp::default_buffer_size;
+                asio::ip::tcp::socket sock;
+                asio::ip::tcp::acceptor acceptor;
+            };
+
+            struct udp {
+                __IO_INTERNAL_HEADER_PERMISSION;
+                using prot_output_type = std::pair<std::span<char>, asio::ip::udp::endpoint>;
+                using prot_input_type = std::pair<std::span<char>, asio::ip::udp::endpoint>;
+                static constexpr size_t default_buffer_size = 1024 * 16;
+                template <typename T_FSM>
+                inline udp(fsm<T_FSM>& state_machine) : manager(state_machine.getManager()), asio_sock(manager->io_ctx) {
+                    buffer.resize(default_buffer_size);
                 }
 
-                IO_MANAGER_FORWARD_FUNC(asio_sock, open);
-                IO_MANAGER_FORWARD_FUNC(asio_sock, bind);
+                inline void setBufSize(size_t size) {
+                    buffer.resize(size);
+                }
+
+                //receive function
+                inline void operator >>(future_with<std::pair<std::span<char>, asio::ip::udp::endpoint>>& fut) {
+                    auto prom = manager->make_future(fut, &fut.data);
+                    if (!asio_sock.is_open()) {
+                        prom.reject_later(std::make_error_code(std::errc::not_connected));
+                        return;
+                    }
+
+                    asio_sock.async_receive_from(asio::buffer(buffer), remote_endpoint,
+                        [this, prom = std::move(prom)](const std::error_code& ec, size_t bytes_read) mutable {
+                            if (ec) {
+                                prom.reject_later(ec);
+                                return;
+                            }
+
+                            auto ptr = prom.resolve_later();
+                            if (ptr) {
+                                *ptr = std::make_pair(std::span<char>(buffer.data(), bytes_read), remote_endpoint);
+                            }
+                        });
+                }
+
+                //send function
+                inline future operator <<(const std::pair<std::span<char>, asio::ip::udp::endpoint>& span) {
+                    // Set non-blocking for newly created sockets
+                    std::error_code ec;
+                    asio_sock.non_blocking(true, ec);
+
+                    future fut;
+                    promise<> prom = manager->make_future(fut);
+                    if (!asio_sock.is_open()) {
+                        prom.reject_later(std::make_error_code(std::errc::not_connected));
+                        return fut;
+                    }
+
+                    // Try immediate non-blocking send first
+                    std::error_code write_ec;
+                    size_t bytes_written = asio_sock.send_to(
+                        asio::buffer(span.first.data(), span.first.size()), 
+                        span.second, 
+                        0, // flags
+                        write_ec
+                    );
+                    
+                    // For UDP, if we get a would_block, we should use async send
+                    // If we get any other error, fail immediately
+                    if (!write_ec && bytes_written == span.first.size()) {
+                        prom.resolve_later();
+                        return fut;
+                    }
+                    
+                    if (write_ec && write_ec != asio::error::would_block) {
+                        prom.reject_later(write_ec);
+                        return fut;
+                    }
+                    
+                    // Create a copy of data using unique_ptr
+                    auto data_copy = std::make_unique<std::string>(
+                        span.first.data(), span.first.size()
+                    );
+                    auto endpoint_copy = span.second;
+                    
+                    asio_sock.async_wait(asio::ip::udp::socket::wait_write,
+                        [this, data = std::move(data_copy), endpoint = endpoint_copy, prom = std::move(prom)]
+                        (const std::error_code& ec) mutable {
+                            if (ec) {
+                                prom.reject_later(ec);
+                                return;
+                            }
+
+                            std::error_code write_ec;
+                            asio_sock.send_to(
+                                asio::buffer(data->data(), data->size()), 
+                                endpoint, 
+                                0, // flags
+                                write_ec
+                            );
+                            
+                            if (write_ec) {
+                                prom.reject_later(write_ec);
+                            } else {
+                            prom.resolve_later();
+                            }
+                        });
+
+                    return fut;
+                }
+
+                inline bool bind(const asio::ip::udp::endpoint& endpoint) {
+                    std::error_code ec;
+                    asio_sock.open(endpoint.protocol(), ec);
+                    if (ec) {
+                        return false;
+                    }
+
+                    asio_sock.bind(endpoint, ec);
+                    if (ec) {
+                        return false;
+                    }
+                    return !ec;
+                }
+
+                inline void close() {
+                    if (asio_sock.is_open()) {
+                        std::error_code ec;
+                        asio_sock.close(ec);
+                    }
+                }
+
+                IO_MANAGER_FORWARD_FUNC(asio_sock, native_handle);
                 IO_MANAGER_FORWARD_FUNC(asio_sock, is_open);
                 IO_MANAGER_FORWARD_FUNC(asio_sock, local_endpoint);
-                IO_MANAGER_FORWARD_FUNC(asio_sock, available);
 
             private:
-                asio::ip::udp::socket asio_sock = asio::ip::udp::socket(lowlevel::asioManager);
-                static constexpr size_t BUF_SIZE = 10240;
-                struct data_with_endpoint {
-                    std::string buf;
-                    asio::ip::udp::endpoint endpoint;
-                };
-                std::shared_ptr<data_with_endpoint> recv_buf = std::make_shared<data_with_endpoint>();
-                std::shared_ptr<data_with_endpoint> send_buf = std::make_shared<data_with_endpoint>();
-                io::async_future recv_future;
+                io::manager* manager = nullptr;
+                std::string buffer;
+                asio::ip::udp::socket asio_sock;
+                asio::ip::udp::endpoint remote_endpoint;
             };
         };
 
-        namespace dns {
-#include "protocol/dns.h"
-        };
-
-        namespace kcp {
-            namespace detail {
-#include "protocol/ikcp.c"
-            };
-            //protocol control block
-            struct pcb {
-                using lowlevel_output = std::function<int(std::span<const char>)>;
-                template<typename T_FSM>
-                inline pcb(fsm<T_FSM>& fsm_user) {
-                    _kcp = detail::ikcp_create(0, nullptr);
-                    _fsm = fsm_user.spawn_now([](detail::ikcpcb* _kcp)->fsm_func<fsm_builtin> {
-                        auto& fsm_user = co_await io::get_fsm;
-                        io::clock delayer;
-                        while (1)
-                        {
-                            auto now = std::chrono::system_clock::now();
-                            auto duration = now.time_since_epoch();
-                            uint32_t timestamp = (uint32_t)std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
-                            detail::ikcp_update(_kcp, timestamp);
-                            uint32_t delay_time = detail::ikcp_check(_kcp, timestamp) - timestamp;
-                            fsm_user.make_clock(delayer, std::chrono::milliseconds(delay_time));
-                            co_await delayer;
-                        }
-                        }(_kcp));
-                }
-                inline pcb(pcb&& right) noexcept :_kcp(right._kcp), _fsm(std::move(right._fsm)) {}
-                pcb& operator=(pcb&& right) noexcept {
-                    if (this != &right) {
-                        if (_kcp) {
-                            detail::ikcp_release(_kcp);
-                        }
-                        _kcp = right._kcp;
-                        right._kcp = nullptr;
-                        _fsm = std::move(right._fsm);
-                    }
-                    return *this;
-                }
-                inline ~pcb() {
-                    if (_kcp)
-                        detail::ikcp_release(_kcp);
-                }
-                inline int send(const char* buffer, int len) { return detail::ikcp_send(_kcp, buffer, len); }
-                template <typename T_FSM>
-                inline future& future_recv(fsm<T_FSM>& state_machine) {
-                    auto status = recv_future.status();
-                    if (status == io::future::status_t::null ||
-                        status == io::future::status_t::fullfilled ||
-                        status == io::future::status_t::rejected)
-                    {
-                        state_machine.make_future(recv_future);
-                    }
-                    return recv_future;
-                }
-                inline auto readGetErr() { return recv_future.getErr(); }
-                inline int recv(char* buffer, int len) { return detail::ikcp_recv(_kcp, buffer, len); }
-                inline void setoutput(lowlevel_output output) { return detail::ikcp_setoutput(_kcp, output); }
-                inline int input(const char* buffer, long len) { 
-                    int ret = detail::ikcp_input(_kcp, buffer, len);
-                    if (detail::ikcp_peeksize(_kcp) > 0)
-                    {
-                        recv_future.getPromise().resolve_later();
-                    }
-                    return ret;
-                }
-                inline void input_err(std::error_code ec) { recv_future.getPromise().reject_later(ec); }
-                inline void flush() { detail::ikcp_flush(_kcp); }
-                inline int peeksize() const { return detail::ikcp_peeksize(_kcp); }
-                inline int setmtu(int mtu) { return detail::ikcp_setmtu(_kcp, mtu); }
-                inline int wndsize(int sndwnd, int rcvwnd) { return detail::ikcp_wndsize(_kcp, sndwnd, rcvwnd); }
-                inline int waitsnd() const { return detail::ikcp_waitsnd(_kcp); }
-                inline int nodelay(int nodelay_enable, int interval, int resend, int nc) { return detail::ikcp_nodelay(_kcp, nodelay_enable, interval, resend, nc); }
-                template<typename... Args>
-                inline void log(int mask, const char* fmt, Args... args) { detail::ikcp_log(_kcp, mask, fmt, args...); }
-                IO_MANAGER_BAN_COPY(pcb);
-            private:
-                struct fsm_builtin {};
-                detail::ikcpcb* _kcp = nullptr;
-                fsm_handle<fsm_builtin> _fsm;
-                future recv_future;
-            };
-        };
-
-        namespace http {
-#include "protocol/http.h"
-        };
-
-        // software simulated protocol, the same as below
-        namespace uart{};
-
-        namespace i2c{};
-
-        namespace spi{};
-
-        namespace can{};
-
-        namespace usb{};
+        // software simulated protocol
+//        namespace prot {
+//            namespace dns {
+//#include "protocol/dns.h"
+//            };
+//
+//            namespace kcp {
+//                namespace detail {
+//#include "protocol/ikcp.c"
+//                };
+//                //protocol control block
+//                struct pcb {
+//                    using lowlevel_output = std::function<int(std::span<const char>)>;
+//                    template<typename T_FSM>
+//                    inline pcb(fsm<T_FSM>& fsm_user) {
+//                        _kcp = detail::ikcp_create(0, nullptr);
+//                        _fsm = fsm_user.spawn_now([](detail::ikcpcb* _kcp)->fsm_func<fsm_builtin> {
+//                            auto& fsm_user = co_await io::get_fsm;
+//                            io::clock delayer;
+//                            while (1)
+//                            {
+//                                auto now = std::chrono::system_clock::now();
+//                                auto duration = now.time_since_epoch();
+//                                uint32_t timestamp = (uint32_t)std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+//                                detail::ikcp_update(_kcp, timestamp);
+//                                uint32_t delay_time = detail::ikcp_check(_kcp, timestamp) - timestamp;
+//                                fsm_user.make_clock(delayer, std::chrono::milliseconds(delay_time));
+//                                co_await delayer;
+//                            }
+//                            }(_kcp));
+//                    }
+//                    inline pcb(pcb&& right) noexcept :_kcp(right._kcp), _fsm(std::move(right._fsm)) {}
+//                    pcb& operator=(pcb&& right) noexcept {
+//                        if (this != &right) {
+//                            if (_kcp) {
+//                                detail::ikcp_release(_kcp);
+//                            }
+//                            _kcp = right._kcp;
+//                            right._kcp = nullptr;
+//                            _fsm = std::move(right._fsm);
+//                        }
+//                        return *this;
+//                    }
+//                    inline ~pcb() {
+//                        if (_kcp)
+//                            detail::ikcp_release(_kcp);
+//                    }
+//                    inline int send(const char* buffer, int len) { return detail::ikcp_send(_kcp, buffer, len); }
+//                    template <typename T_FSM>
+//                    inline future& future_recv(fsm<T_FSM>& state_machine) {
+//                        auto status = recv_future.status();
+//                        if (status == io::future::status_t::null ||
+//                            status == io::future::status_t::fullfilled ||
+//                            status == io::future::status_t::rejected)
+//                        {
+//                            state_machine.make_future(recv_future);
+//                        }
+//                        return recv_future;
+//                    }
+//                    inline auto readGetErr() { return recv_future.getErr(); }
+//                    inline int recv(char* buffer, int len) { return detail::ikcp_recv(_kcp, buffer, len); }
+//                    inline void setoutput(lowlevel_output output) { return detail::ikcp_setoutput(_kcp, output); }
+//                    inline int input(const char* buffer, long len) {
+//                        int ret = detail::ikcp_input(_kcp, buffer, len);
+//                        if (detail::ikcp_peeksize(_kcp) > 0)
+//                        {
+//                            recv_future.getPromise().resolve_later();
+//                        }
+//                        return ret;
+//                    }
+//                    inline void input_err(std::error_code ec) { recv_future.getPromise().reject_later(ec); }
+//                    inline void flush() { detail::ikcp_flush(_kcp); }
+//                    inline int peeksize() const { return detail::ikcp_peeksize(_kcp); }
+//                    inline int setmtu(int mtu) { return detail::ikcp_setmtu(_kcp, mtu); }
+//                    inline int wndsize(int sndwnd, int rcvwnd) { return detail::ikcp_wndsize(_kcp, sndwnd, rcvwnd); }
+//                    inline int waitsnd() const { return detail::ikcp_waitsnd(_kcp); }
+//                    inline int nodelay(int nodelay_enable, int interval, int resend, int nc) { return detail::ikcp_nodelay(_kcp, nodelay_enable, interval, resend, nc); }
+//                    template<typename... Args>
+//                    inline void log(int mask, const char* fmt, Args... args) { detail::ikcp_log(_kcp, mask, fmt, args...); }
+//                    IO_MANAGER_BAN_COPY(pcb);
+//                private:
+//                    struct fsm_builtin {};
+//                    detail::ikcpcb* _kcp = nullptr;
+//                    fsm_handle<fsm_builtin> _fsm;
+//                    future recv_future;
+//                };
+//            };
+//
+//            namespace http {
+//#include "protocol/http.h"
+//            };
+//
+//            // software simulated protocol, the same as below
+//            namespace uart {};
+//
+//            namespace i2c {};
+//
+//            namespace spi {};
+//
+//            namespace can {};
+//
+//            namespace usb {};
+//        };
 
 #include "internal/definitions.h"
-        }
+    }
 }

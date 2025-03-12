@@ -28,6 +28,8 @@
 #include <type_traits>
 #include <functional>
 #include "selectMarco.h"
+
+#if IO_USE_ASIO
 //#include "../asio/asio.hpp"
 #include "../asio/asio/buffer.hpp"
 #include "../asio/asio/io_context.hpp"
@@ -54,3 +56,4 @@
 #include "../asio/asio/ip/resolver_query_base.hpp"
 #include "../asio/asio/ip/tcp.hpp"
 #include "../asio/asio/ip/udp.hpp"
+#endif

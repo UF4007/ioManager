@@ -375,20 +375,4 @@ class lowlevel {
         size_t ind = 0;
         std::array<lowlevel::awaiter*, sizeof...(Args)> il;
     };
-
-
-    inline static asio::io_context& asioManager = *([] {
-        asio::io_context* ptr;
-        std::atomic<bool> sem = 0;
-        std::thread([&] {
-            static asio::io_context mngr = asio::io_context(1);
-            ptr = &mngr;
-            sem = 1;
-            sem.notify_all();
-            asio::executor_work_guard<asio::io_context::executor_type> guard = asio::make_work_guard(mngr);
-            mngr.run();
-            }).detach();
-        sem.wait(0);
-        return ptr;
-        }());
 };

@@ -14,9 +14,12 @@
 																	template <typename T2>requires (std::is_same_v<T2, void> || std::is_default_constructible_v<T2>)friend struct io::fsm_func;\
 																	template <typename T2>friend struct io::fsm_handle;\
 																	friend struct io::manager;\
-																	friend struct io::tcp::socket;\
-																	friend struct io::tcp::acceptor;\
-																	friend struct io::udp::socket;\
+																	friend struct io::sock::tcp;\
+																	friend struct io::sock::tcp_accp;\
+																	friend struct io::sock::udp;\
+																	template <typename Rear2, typename Front2, typename Adaptor2>friend struct io::pipeline_constructor;\
+																	template <typename Rear2, typename Front2, typename Adaptor2>friend struct io::pipeline;\
+																	template <typename FSM_Index2, typename FSM_In2, typename FSM_Out2>friend struct io::rpc;\
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------
 template <typename T>struct hive;
@@ -47,12 +50,14 @@ template <typename T>
 struct fsm_func;
 template <typename T>struct fsm_handle;
 struct manager;
-namespace tcp {
-	struct socket;
-	struct acceptor;
-};
-namespace udp {
-	struct socket;
+struct yield_t;
+template <typename Front, typename Rear, typename Adaptor>struct pipeline_constructor;
+template <typename Front, typename Rear, typename Adaptor>struct pipeline;
+template <typename FSM_Index, typename FSM_In, typename FSM_Out>struct rpc;
+namespace sock {
+	struct tcp;
+	struct tcp_accp;
+	struct udp;
 };
 
 #define IO_MANAGER_FORWARD_FUNC(___obj___,___func___) template <typename ...Args> auto ___func___(Args&&...args) { return ___obj___.___func___(std::forward<Args>(args)...); }
