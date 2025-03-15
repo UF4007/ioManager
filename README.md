@@ -89,31 +89,12 @@ a io::manager == a thread
 ```cpp
 io::manager mgr;
 int main() {
-    mgr.spawn_later(parent_coroutine()).detach();
-    
     // Drive the manager (process coroutines)
     while (true) {
         mgr.drive();
     }
     
     return 0;
-}
-```
-
-### Creating a Basic FSM Coroutine
-
-Every coroutine in io::manager is defined as an FSM function using the `io::fsm_func<T>` template, where `T` is the associated type:
-
-```cpp
-io::fsm_func<void> simple_coroutine()
-{
-    // Get the FSM context
-    io::fsm<void> &fsm = co_await io::get_fsm;
-    
-    // Your coroutine code here
-    std::cout << "Hello from a coroutine!" << std::endl;
-    
-    co_return;
 }
 ```
 
@@ -236,7 +217,7 @@ io::fsm_func<void> lifetime_example()
 > **Important Notes:**
 > - When a `fsm_handle` is destroyed without being detached, the corresponding coroutine is also destroyed.
 > - Detached coroutines continue running until they complete or the manager is destroyed.
-> - The FSM context (`io::fsm<T>`) is only valid within the coroutine that obtained it.
+> - The FSM context (`io::fsm<T>&`) is only valid within the coroutine that obtained it.
 
 ## Future/Promise: Coroutine Communication
 
@@ -538,7 +519,7 @@ An Output Protocol is a protocol that can output data, implementing the `operato
 2. **Direct Output Protocol**: 
    - Defines a non-void `prot_output_type` that specifies the type of data it produces
    - Implements `operator>>(prot_output_type&)` for direct data output without futures
-   - Data is directly written to the provided reference without any awaiting
+   - A protocol that can be obtained instantly at any time and any number of times
 
 #### Input Protocols (2 types)
 
@@ -569,6 +550,8 @@ struct my_protocol {
     // Output operation (implements Output Protocol)
     // Can be any of the three output protocol types
     void operator>>(future_with<OutputType>& fut) {
+        //operator>> Need to be responsible for the construction of future
+        io::promise<OutputType> promise = fsm.make_future(fut,&fut.data);
         // Implementation for outputting data
         // When data is available, resolve the future with the data
     }
@@ -638,6 +621,7 @@ You can also provide an error handling callback when starting the pipeline. This
 // Start the pipeline with an error handler
 auto started_pipeline = std::move(pipeline).start([](int which, bool output_or_input) {
     std::cout << "Pipeline segment " << which << " encountered an error" << std::endl;
+              << (output_or_input ? " (output)" : " (input)") << std::endl;
 });
 ```
 
@@ -718,10 +702,17 @@ io::fsm_func<void> pipeline_example() {
 
 ## Performance
 
-io::manager is designed for high performance, achieving:
-- More than 100M coroutines per second switch speed in a single thread
-- Near-native C++ coroutine performance
-- Efficient memory usage with pooled allocations
+Benchmark results on Windows environment (MSVC VS2022) with Intel Core i5-9300HF CPU @ 2.40GHz and 24GB RAM: (30000 coroutines)
+
+### Coroutine Creation Performance
+- Average coroutine creation rate: ~4.8 million per second
+- Average creation time: ~208 nanoseconds
+
+### Coroutine Switching Performance
+- Average switching rate: ~115 million switches per second
+- Average switch time: ~8.7 nanoseconds
+
+These performance metrics demonstrate the high efficiency of ioManager, particularly in coroutine switching where it can handle over 100 million switches per second, approaching the performance of native C++20 coroutines. The library also achieves efficient memory usage through its pooled allocation strategy.
 
 ## License
 

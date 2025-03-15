@@ -32,13 +32,13 @@
 
 - **管线化并发**：将协议组装成自动收发数据的管线
 - **Future/Promise**：JavaScript风格的future/promise，支持all/any/race/allSettle操作
-- **chan**：Go语言风格的chan和async_chan，用于协程间通信、线程间通信
+- **chan**：Go语言风格的chan和async_chan，用于协程间通信、线程间通信（还没有做完）
 - **RAII友好**：资源管理遵循RAII原则，确保安全性和可靠性
 - **高性能**：接近原生C++协程的速度
 
 ## 目录
 
-- [有限状态机(FSM)：协程函数](#有限状态机(FSM)：协程函数)
+- [有限状态机(FSM)：协程函数](#有限状态机FSM协程函数)
   - [创建管理器](#创建管理器)
   - [创建基本的FSM协程](#创建基本的fsm协程)
   - [生成和管理协程](#生成和管理协程)
@@ -49,7 +49,7 @@
   - [创建和使用Future/Promise对](#创建和使用futurepromise对)
   - [错误处理](#错误处理)
   - [组合多个Future](#组合多个future)
-  - [多线程：async_future/async_promise](#多线程：async_future/async_promise)
+  - [多线程：async_future/async_promise](#多线程async_futureasync_promise)
   - [带Future返回类型的协程](#带future返回类型的协程)
 - [协议和管线](#协议和管线)
   - [协议Concept](#协议Concept)
@@ -74,31 +74,12 @@
 ```cpp
 io::manager mgr;
 int main() {
-    mgr.spawn_later(parent_coroutine()).detach();
-    
     // 驱动管理器（处理协程）
     while (true) {
         mgr.drive();
     }
     
     return 0;
-}
-```
-
-### 创建基本的FSM协程
-
-每个协程都使用`io::fsm_func<T>`模板定义为FSM函数，其中`T`是内建类型：
-
-```cpp
-io::fsm_func<void> simple_coroutine()
-{
-    // 获取FSM上下文
-    io::fsm<void> &fsm = co_await io::get_fsm;
-    
-    // 您的协程代码
-    std::cout << "来自协程的问候！" << std::endl;
-    
-    co_return;
 }
 ```
 
@@ -217,7 +198,7 @@ io::fsm_func<void> lifetime_example()
 > **重要提示：**
 > - 当`fsm_handle`在未分离的情况下被销毁时，相应的协程也会被销毁。
 > - 分离的协程会继续运行，直到它们完成或管理器被销毁。
-> - FSM上下文（`io::fsm<T>`）仅在获取它的协程内有效。
+> - FSM上下文（`io::fsm<T>&`）仅在获取它的协程内有效。
 
 ## Future/Promise：协程通信
 
@@ -365,7 +346,7 @@ io::fsm_func<void> handle_errors(std::reference_wrapper<io::future> fut_ref)
 
 #### any - 等待任何future resolve 或所有future reject 
 
-#### race - 类似于any，但如果任何future reject 则reject 
+#### race - 任何future被设置，则返回
 
 #### allSettle - 等待所有future被设置
 
@@ -513,7 +494,7 @@ io::fsm_func<void> use_future_coroutines()
 2. **直接输出协议**：
    - 定义了非void的`prot_output_type`，指定它产生的数据类型
    - 实现了`operator>>(prot_output_type&)`，用于不带future的直接数据输出
-   - 数据直接写入引用
+   - 适用于任意时间、任意次数都可立即获取的协议
 
 #### 输入协议（2种类型）
 
@@ -540,8 +521,10 @@ struct my_protocol {
     // 输出操作（实现输出协议）
     // 可以是三种输出协议类型中的任何一种
     void operator>>(future_with<OutputType>& fut) {
+        //operator>>需要负责future的构造
+        io::promise<OutputType> promise = fsm.make_future(fut,&fut.data);
         // 输出数据的实现
-        // 当数据可用时，用数据resolve future
+        // 当数据可用时，resolve此future对应的promise
     }
     
     // 输入操作（实现输入协议）
@@ -580,7 +563,7 @@ auto pipeline = io::pipeline<>() >> output_protocol >> middle_protocol >> input_
 
 #### 适配器
 
-适配器是在具有不兼容类型的协议之间转换数据的函数：
+适配器是在具有不兼容类型的协议之间转换数据的可调用体：
 
 ```cpp
 auto pipeline = io::pipeline<>() >> protocol1 >> 
@@ -603,16 +586,17 @@ auto started_pipeline = std::move(pipeline).start();
 started_pipeline <= co_await +started_pipeline;
 ```
 
-您也可以在启动管线时提供一个错误处理回调函数。当管线中的任何 future 返回错误时，这个回调函数将被调用：
+您也可以在启动管线时提供一个错误处理可调用体。当管线中的任何 future 返回错误时，可调用体被调用：
 
 ```cpp
 // 使用错误处理器启动管线
 auto started_pipeline = std::move(pipeline).start([](int which, bool output_or_input) {
-    std::cout << "管线段 " << which << " 发生错误" << std::endl;
+    std::cout << "管线段 " << which << " 发生错误" << 
+              << (output_or_input ? " (output)" : " (input)") << std::endl;
 });
 ```
 
-错误处理回调函数应该具有 `void(int, bool)` 的签名。若output_or_input为true，则表示发生错误的是管线段的出口端，否则为入口端。
+错误处理可调用体应该具有 `void(int, bool)` 的签名。若output_or_input为true，则表示发生错误的是管线段的出口端，否则为入口端。
 
 另外，您可以直接将管线生成到一个会持续驱动它的协程中：
 
@@ -689,9 +673,17 @@ io::fsm_func<void> pipeline_example() {
 
 ## 性能
 
-- 在单线程中每秒超过1亿次协程切换速度
-- 接近原生C++协程性能
-- 通过池化分配实现高效内存使用
+基于 Intel Core i5-9300HF CPU @ 2.40GHz 和 24GB RAM 的 Windows 环境（MSVC VS2022）进行的基准测试结果：（30000协程下）
+
+### 协程创建性能
+- 平均每秒创建协程数：约 4.8 百万次/秒
+- 平均协程创建时间：约 208 纳秒
+
+### 协程切换性能
+- 平均每秒切换次数：约 1.15 亿次/秒
+- 平均切换时间：约 8.7 纳秒
+
+GCC下的速度甚至更快，已接近原生 C++20 协程的性能。
 
 ## 使用的库
 

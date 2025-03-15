@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <string.h>
 #include <cwchar>
 #include <queue>
 #include <memory>

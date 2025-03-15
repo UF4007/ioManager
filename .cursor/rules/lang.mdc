@@ -1,0 +1,10 @@
+---
+description: 对我交谈使用中文，代码中的注释与输出字符串内容要使用英文
+globs: 
+alwaysApply: false
+---
+
+# Your rule content
+
+- You can @ files here
+- You can use markdown but dont have to

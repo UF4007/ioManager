@@ -11,26 +11,17 @@
  * Looking forward to visiting https://github.com/UF4007/ to propose issues, pull your protocol driver, and make io::manager stronger and more universal.
 */
 #pragma once
+#define IO_LIB_VERSION___ v3
 #include "internal/config.h"
 #include "internal/includes.h"
 namespace io
 {
     //headonly version distinguish, prevent the linker from mixing differental versions when multi-reference.
-    inline namespace v3 {
-
-        // -------------------------------basis structure--------------------------------
+    inline namespace IO_LIB_VERSION___ {
 
 #include "internal/forwardDeclarations.h"
-        enum class err : uint8_t {
-            ok = 0,
-            failed = 1,
-            repeat = 2,         //try again please
-            notfound = 3,
-            less = 4,           //more data are required
-            more = 5,           //too much data was received
-            bufoverf = 6,       //buffer overflow
-            formaterr = 7,      //format error
-        };
+
+        // -------------------------------basis structure--------------------------------
 
         //Generic memory pool for single type category. 
         // Not Thread safe.
@@ -2010,6 +2001,48 @@ namespace io
                 requires(T handler, int which, bool output_or_input) {
                     { handler(which, output_or_input) } -> std::same_as<void>;
             };
+
+            template <typename F>
+            struct function_traits;
+
+            template <typename R, typename Arg>
+            struct function_traits<R(*)(Arg)> {
+                using result_type = R;
+                template <size_t i>
+                struct arg {
+                    using type = typename std::tuple_element<i, std::tuple<Arg>>::type;
+                };
+            };
+
+            template <typename R, typename Arg>
+            struct function_traits<std::function<R(Arg)>> {
+                using result_type = R;
+                template <size_t i>
+                struct arg {
+                    using type = typename std::tuple_element<i, std::tuple<Arg>>::type;
+                };
+            };
+
+            template <typename C, typename R, typename Arg>
+            struct function_traits<R(C::*)(Arg)> {
+                using result_type = R;
+                template <size_t i>
+                struct arg {
+                    using type = typename std::tuple_element<i, std::tuple<Arg>>::type;
+                };
+            };
+
+            template <typename C, typename R, typename Arg>
+            struct function_traits<R(C::*)(Arg) const> {
+                using result_type = R;
+                template <size_t i>
+                struct arg {
+                    using type = typename std::tuple_element<i, std::tuple<Arg>>::type;
+                };
+            };
+
+            template <typename F>
+            struct function_traits : public function_traits<decltype(&F::operator())> {};
         };
 
         template <typename Front = void, typename Rear = void, typename Adaptor = void>
@@ -2062,7 +2095,7 @@ namespace io
                 trait::is_output_prot<std::remove_reference_t<Rear>>::value&&
                 trait::is_input_prot<std::remove_reference_t<T>>::value&&
                 trait::is_compatible_prot_pair_v<std::remove_reference_t<Rear>, std::remove_reference_t<T>>&&
-                std::is_same_v<typename std::remove_reference_t<Rear>::prot_output_type, typename  std::remove_reference_t<T>::prot_input_type>
+                std::is_convertible_v<typename std::remove_reference_t<Rear>::prot_output_type, typename  std::remove_reference_t<T>::prot_input_type>
                 )
                 inline auto operator>>(T&& rear)&& {
                 return pipeline<std::remove_reference_t<decltype(*this)>,
@@ -2099,6 +2132,8 @@ namespace io
 
             pipeline(pipeline&) = delete;
             void operator=(pipeline&) = delete;
+
+            pipeline(pipeline&&) = default;
             
         private:
             inline decltype(auto) awaitable() {
@@ -2216,8 +2251,6 @@ namespace io
                     }
                 }
             }
-            
-            pipeline(pipeline&&) = default;
 
             template <size_t N>
             inline void await_get(std::array<future*, N>& futures, size_t& index) {
@@ -2368,7 +2401,7 @@ namespace io
                 std::is_void_v<Adaptor>&&
                 trait::is_input_prot<typename std::remove_reference_t<T>>::value&&
                 trait::is_compatible_prot_pair_v<std::remove_reference_t<Front>, std::remove_reference_t<T>>&&
-                std::is_same_v<typename trait::is_output_prot_gen<std::remove_reference_t<Front>>::prot_output_type, typename std::remove_reference_t<T>::prot_input_type>
+                std::is_convertible_v<typename trait::is_output_prot_gen<std::remove_reference_t<Front>>::prot_output_type, typename std::remove_reference_t<T>::prot_input_type>
                 )
                 inline auto operator>>(T&& rear)&& {
                 return pipeline<Front,
@@ -2386,7 +2419,7 @@ namespace io
                 !std::is_void_v<Adaptor>&&
                 trait::is_input_prot<std::remove_reference_t<T>>::value&&
                 trait::is_compatible_prot_pair_v<std::remove_reference_t<Front>, std::remove_reference_t<T>>&&
-                std::is_same_v<typename trait::is_adaptor<Adaptor, typename trait::is_output_prot_gen<std::remove_reference_t<Front>>::prot_output_type>::result_type, typename std::remove_reference_t<T>::prot_input_type>
+                std::is_convertible_v<typename trait::is_adaptor<Adaptor, typename trait::is_output_prot_gen<std::remove_reference_t<Front>>::prot_output_type>::result_type, typename std::remove_reference_t<T>::prot_input_type>
                 )
                 inline auto operator>>(T&& rear)&& {
                 return pipeline<Front,
@@ -2435,10 +2468,6 @@ namespace io
             pipeline_started(const pipeline_started&) = delete;
             pipeline_started& operator=(const pipeline_started&) = delete;
 
-            // Delete move constructor and assignment
-            pipeline_started(pipeline_started&&) = delete;
-            pipeline_started& operator=(pipeline_started&&) = delete;
-
             // Drive the pipeline with a specific index
             inline void operator<=(int which) requires (individual_coro == false){
                 if constexpr (std::is_same_v<ErrorHandler, std::monostate>) {
@@ -2455,6 +2484,10 @@ namespace io
             }
 
         private:
+            // Delete move constructor and assignment
+            pipeline_started(pipeline_started&&) = default;
+            pipeline_started& operator=(pipeline_started&&) = default;
+
             [[no_unique_address]] std::conditional_t<individual_coro, std::monostate, Pipeline> _pipeline;
             [[no_unique_address]] ErrorHandler errorHandler;
         };
@@ -2475,17 +2508,79 @@ namespace io
             inline pipeline() {}
         };
 
-        template <typename FSM_Index = void, typename FSM_In = void, typename FSM_Out = void>
-        struct rpc {
-
-        };
-
-        //hepler struct of rpc<>::def.
+        //helper struct of rpc<>::def.
         template <>
         struct rpc<void, void, void> {
             rpc() = delete;
+            
             //default struct of rpc
-            struct def {};
+            template <typename Req, typename Resp>
+            struct def {
+                def(std::function<Resp(Req)> h) : handler(h) {}
+                def() = default;
+                
+                std::function<Resp(Req)> handler;
+                
+                operator bool() const {
+                    return static_cast<bool>(handler);
+                }
+            };
+            
+            template <typename F>
+            def(F) -> def<typename std::remove_reference_t<typename trait::function_traits<F>::template arg<0>::type>,
+                          typename trait::function_traits<F>::result_type>;
+        };
+
+        template <typename key = void, typename req = void, typename rsp = void>
+        struct rpc {
+            __IO_INTERNAL_HEADER_PERMISSION;
+            using key_type = key;
+            using request_type = req;
+            using response_type = rsp;
+            using handler_type = std::function<response_type(request_type)>;
+            
+            template <typename... Args>
+            inline rpc(Args&&... args) {
+                process_args(std::forward<Args>(args)...);
+            }
+            
+            // Call operator to invoke the appropriate handler
+            inline response_type operator()(const std::pair<key_type, request_type>& request) {
+                const auto& [key, req] = request;
+                auto it = handlers_.find(key);
+                if (it != handlers_.end()) {
+                    return it->second(req);
+                } else if (default_handler_) {
+                    return default_handler_(req);
+                } else {
+                    throw std::runtime_error("No handler found for key and no default handler provided");
+                }
+            }
+
+        private:
+            std::unordered_map<key_type, handler_type> handlers_;
+            handler_type default_handler_;
+            
+            template <typename... Args>
+            inline void process_args(const std::pair<key_type, handler_type>& pair, Args&&... args) {
+                handlers_[pair.first] = pair.second;
+                process_args(std::forward<Args>(args)...);
+            }
+            
+            template <typename Def>
+            inline void process_args(const Def& default_handler) {
+                if constexpr (std::is_same_v<Def, typename rpc<>::template def<request_type, response_type>> ||
+                             std::is_convertible_v<decltype(default_handler.handler), handler_type>) {
+                    if (default_handler) {
+                        default_handler_ = default_handler.handler;
+                    }
+                } else {
+                    static_assert(std::is_same_v<Def, std::pair<key_type, handler_type>>, 
+                        "RPC construct ERROR: def function signature must be response_type(request_type)");
+                }
+            }
+            
+            inline void process_args() {}
         };
 
 
@@ -2861,110 +2956,20 @@ namespace io
             };
         };
 
-        // software simulated protocol
-//        namespace prot {
-//            namespace dns {
-//#include "protocol/dns.h"
-//            };
-//
-//            namespace kcp {
-//                namespace detail {
-//#include "protocol/ikcp.c"
-//                };
-//                //protocol control block
-//                struct pcb {
-//                    using lowlevel_output = std::function<int(std::span<const char>)>;
-//                    template<typename T_FSM>
-//                    inline pcb(fsm<T_FSM>& fsm_user) {
-//                        _kcp = detail::ikcp_create(0, nullptr);
-//                        _fsm = fsm_user.spawn_now([](detail::ikcpcb* _kcp)->fsm_func<fsm_builtin> {
-//                            auto& fsm_user = co_await io::get_fsm;
-//                            io::clock delayer;
-//                            while (1)
-//                            {
-//                                auto now = std::chrono::system_clock::now();
-//                                auto duration = now.time_since_epoch();
-//                                uint32_t timestamp = (uint32_t)std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
-//                                detail::ikcp_update(_kcp, timestamp);
-//                                uint32_t delay_time = detail::ikcp_check(_kcp, timestamp) - timestamp;
-//                                fsm_user.make_clock(delayer, std::chrono::milliseconds(delay_time));
-//                                co_await delayer;
-//                            }
-//                            }(_kcp));
-//                    }
-//                    inline pcb(pcb&& right) noexcept :_kcp(right._kcp), _fsm(std::move(right._fsm)) {}
-//                    pcb& operator=(pcb&& right) noexcept {
-//                        if (this != &right) {
-//                            if (_kcp) {
-//                                detail::ikcp_release(_kcp);
-//                            }
-//                            _kcp = right._kcp;
-//                            right._kcp = nullptr;
-//                            _fsm = std::move(right._fsm);
-//                        }
-//                        return *this;
-//                    }
-//                    inline ~pcb() {
-//                        if (_kcp)
-//                            detail::ikcp_release(_kcp);
-//                    }
-//                    inline int send(const char* buffer, int len) { return detail::ikcp_send(_kcp, buffer, len); }
-//                    template <typename T_FSM>
-//                    inline future& future_recv(fsm<T_FSM>& state_machine) {
-//                        auto status = recv_future.status();
-//                        if (status == io::future::status_t::null ||
-//                            status == io::future::status_t::fullfilled ||
-//                            status == io::future::status_t::rejected)
-//                        {
-//                            state_machine.make_future(recv_future);
-//                        }
-//                        return recv_future;
-//                    }
-//                    inline auto readGetErr() { return recv_future.getErr(); }
-//                    inline int recv(char* buffer, int len) { return detail::ikcp_recv(_kcp, buffer, len); }
-//                    inline void setoutput(lowlevel_output output) { return detail::ikcp_setoutput(_kcp, output); }
-//                    inline int input(const char* buffer, long len) {
-//                        int ret = detail::ikcp_input(_kcp, buffer, len);
-//                        if (detail::ikcp_peeksize(_kcp) > 0)
-//                        {
-//                            recv_future.getPromise().resolve_later();
-//                        }
-//                        return ret;
-//                    }
-//                    inline void input_err(std::error_code ec) { recv_future.getPromise().reject_later(ec); }
-//                    inline void flush() { detail::ikcp_flush(_kcp); }
-//                    inline int peeksize() const { return detail::ikcp_peeksize(_kcp); }
-//                    inline int setmtu(int mtu) { return detail::ikcp_setmtu(_kcp, mtu); }
-//                    inline int wndsize(int sndwnd, int rcvwnd) { return detail::ikcp_wndsize(_kcp, sndwnd, rcvwnd); }
-//                    inline int waitsnd() const { return detail::ikcp_waitsnd(_kcp); }
-//                    inline int nodelay(int nodelay_enable, int interval, int resend, int nc) { return detail::ikcp_nodelay(_kcp, nodelay_enable, interval, resend, nc); }
-//                    template<typename... Args>
-//                    inline void log(int mask, const char* fmt, Args... args) { detail::ikcp_log(_kcp, mask, fmt, args...); }
-//                    IO_MANAGER_BAN_COPY(pcb);
-//                private:
-//                    struct fsm_builtin {};
-//                    detail::ikcpcb* _kcp = nullptr;
-//                    fsm_handle<fsm_builtin> _fsm;
-//                    future recv_future;
-//                };
-//            };
-//
-//            namespace http {
-//#include "protocol/http.h"
-//            };
-//
-//            // software simulated protocol, the same as below
-//            namespace uart {};
-//
-//            namespace i2c {};
-//
-//            namespace spi {};
-//
-//            namespace can {};
-//
-//            namespace usb {};
-//        };
-
 #include "internal/definitions.h"
     }
 }
+
+// software simulated protocols
+
+#if __has_include("protocol/rpc.h")
+#include "protocol/rpc.h"
+#endif
+
+#if __has_include("protocol/kcp/kcp.h")
+#include "protocol/kcp/kcp.h"
+#endif
+
+#if __has_include("protocol/http/http.h")
+#include "protocol/http/http.h"
+#endif
