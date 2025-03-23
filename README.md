@@ -548,7 +548,7 @@ struct my_protocol {
     using prot_output_type = OutputType; // Type of data this protocol produces
     
     // Output operation (implements Output Protocol)
-    // Can be any of the three output protocol types
+    // Can be any of the two output protocol types
     void operator>>(future_with<OutputType>& fut) {
         //operator>> Need to be responsible for the construction of future
         io::promise<OutputType> promise = fsm.make_future(fut,&fut.data);
@@ -567,11 +567,13 @@ struct my_protocol {
 
 ### Pipeline Mechanism
 
-The pipeline is actually to group all protocols into output-input pairs (pipeline segments), and wait for their futures in a unified coroutine.
+The pipeline actually groups all protocols into output-input pairs (pipeline segments) and processes them in a specific coroutine.
 
 1. **Independent triggering**: Each segment of the pipeline can be triggered independently and move data without relying on the previous or subsequent segments.
 
 2. **Directionality**: Data flows from the output protocol to the input protocol in the pipeline segment, with a single direction.
+
+3. **Orderly**: The pipeline segment will first read the output protocol, then write the input protocol, then read the output protocol, and so on. If the reading process is blocked, it will wait for reading before writing; vice versa.
 
 In a pipeline:
 - The first protocol must be an Output Protocol
@@ -603,9 +605,9 @@ auto pipeline = io::pipeline<>() >> protocol1 >>
     } >> protocol2;
 ```
 
-#### Driving a Pipeline
+#### Driving Pipelines
 
-Once a pipeline is created, you need to start it first to obtain a `pipeline_started` object, and then drive it in a coroutine using the `<=` operator and the `+` operator:
+After creating a pipeline, you first need to call the `start()` method to get a `pipeline_started` object, then use the `<=` operator and `+` operator to drive it in a coroutine:
 
 ```cpp
 // Start the pipeline to get a pipeline_started object
@@ -615,27 +617,36 @@ auto started_pipeline = std::move(pipeline).start();
 started_pipeline <= co_await +started_pipeline;
 ```
 
-You can also provide an error handling callback when starting the pipeline. This callback will be called when any future in the pipeline returns an error:
+You can also provide an error handler callable when starting the pipeline. The callable is invoked when any future in the pipeline returns an error:
 
 ```cpp
 // Start the pipeline with an error handler
-auto started_pipeline = std::move(pipeline).start([](int which, bool output_or_input) {
-    std::cout << "Pipeline segment " << which << " encountered an error" << std::endl;
-              << (output_or_input ? " (output)" : " (input)") << std::endl;
+auto started_pipeline = std::move(pipeline).start([](int which, bool output_or_input, std::error_code ec) {
+    std::cout << "Error in pipeline segment " << which 
+              << (output_or_input ? " (output)" : " (input)")
+              << " - Error: " << ec.message()
+              << " [Code: " << ec.value() << "]" << std::endl;
+    return true;
 });
 ```
 
-The error handling callback should have a signature of `void(int, bool)`. If output_or_input is true, it indicates that the error occurred at the output end of the pipeline segment, otherwise at the input end.
+The error handler callable should have a signature of `void(int, bool, std::error_code)`. Parameters:
 
-Additionally, you can directly spawn the pipeline into a coroutine that will continuously drive it:
+- `which`: The segment number where the error occurred
+- `output_or_input`: If true, the error occurred at the output side of the pipeline segment, otherwise at the input side
+- `ec`: The error code object containing detailed error information
+
+Alternatively, you can spawn the pipeline directly into a coroutine that will drive it continuously:
 
 ```cpp
-// Spawn the pipeline into a coroutine that will continuously drive it
+// Spawn the pipeline into a coroutine that will drive it
 auto pipeline_handle = std::move(pipeline).spawn(fsm);
 
 // Spawn with an error handler
-auto pipeline_handle = std::move(pipeline).spawn(fsm, [](int which, bool output_or_input) {
-    std::cout << "Pipeline segment " << which << " encountered an error" << std::endl;
+auto pipeline_handle = std::move(pipeline).spawn(fsm, [](int which, bool output_or_input, std::error_code ec) {
+    std::cout << "Error in pipeline segment " << which 
+              << (output_or_input ? " (output)" : " (input)")
+              << " - Error: " << ec.message() << std::endl;
     return true;
 });
 ```

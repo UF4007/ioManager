@@ -307,9 +307,180 @@ namespace io
             bool is_full = false;
         };
 
+        // Buffer class that can own or reference memory pointer, move only.
+        template <typename T = char>
+        struct buf
+        {
+            // Default constructor: empty buffer
+            inline buf() : data_ptr(nullptr), data_size(0), data_capacity(0), _owned(false) {}
+            
+            // Constructor from pointer, size, capacity and ownership
+            inline buf(T* ptr, size_t size, size_t capacity, bool take_ownership = false)
+                : data_ptr(ptr), data_size(size), data_capacity(capacity), _owned(take_ownership) {}
 
+            explicit inline buf(size_t capacity) : data_ptr(::operator new(capacity * sizeof(T))), data_size(0), data_capacity(capacity), _owned(true) {
+                std::uninitialized_default_construct_n(data_ptr, data_capacity);
+            }
+            
+            // Explicit constructor from span (copies data)
+            explicit inline buf(const std::span<const T>& span, size_t capacity = 0) 
+                : data_size(span.size()), data_capacity(capacity == 0 ? span.size() : capacity), _owned(true) 
+            {
+                // If requested capacity is smaller than span size, throw an exception
+                if (capacity > 0 && capacity < span.size()) {
+                    assert(!"Buf ERROR: Capacity cannot be smaller than span size");
+                }
+                
+                // Allocate memory
+                data_ptr = static_cast<T *>(::operator new(data_capacity * sizeof(T)));
 
-        // -------------------------------coroutine--------------------------------
+                // Use uninitialized_copy to construct objects from span
+                std::uninitialized_copy(span.begin(), span.end(), data_ptr);
+
+                // Use uninitialized_default_construct_n for remaining capacity if any
+                if (data_capacity > span.size())
+                {
+                    std::uninitialized_default_construct_n(data_ptr + span.size(), data_capacity - span.size());
+                }
+            }
+
+            // Constructor from initializer list
+            inline buf(std::initializer_list<T> init_list, size_t capacity = 0)
+                : data_ptr(::operator new(init_list.size() * sizeof(T))),
+                data_size(init_list.size()),
+                data_capacity(capacity == 0 ? init_list.size() : capacity),
+                _owned(true)
+            {
+                // If requested capacity is smaller than span size, throw an exception
+                if (capacity > 0 && capacity < init_list.size()) {
+                    assert(!"Buf ERROR: Capacity cannot be smaller than span size");
+                }
+
+                std::uninitialized_copy(init_list.begin(), init_list.end(), data_ptr);
+
+                if (data_capacity > init_list.size())
+                {
+                    std::uninitialized_default_construct_n(data_ptr + init_list.size(), data_capacity - init_list.size());
+                }
+            }
+            
+            // Disable copy constructor and copy assignment
+            buf(const buf&) = delete;
+            buf& operator=(const buf&) = delete;
+            
+            // Move constructor
+            inline buf(buf&& other) noexcept 
+                : data_ptr(other.data_ptr), 
+                  data_size(other.data_size), 
+                  data_capacity(other.data_capacity),
+                  _owned(other._owned) 
+            {
+                other.data_ptr = nullptr;
+                other.data_size = 0;
+                other.data_capacity = 0;
+                other._owned = false;
+            }
+            
+            // Move assignment
+            inline buf& operator=(buf&& other) noexcept {
+                if (this != &other) {
+                    // Clean up current resources if _owned
+                    if (_owned && data_ptr) {
+                        // Destroy all objects
+                        std::destroy_n(data_ptr, data_capacity);
+                        ::operator delete(data_ptr);
+                    }
+                    
+                    // Move the data from other
+                    data_ptr = other.data_ptr;
+                    data_size = other.data_size;
+                    data_capacity = other.data_capacity;
+                    _owned = other._owned;
+                    
+                    // Reset the other object
+                    other.data_ptr = nullptr;
+                    other.data_size = 0;
+                    other.data_capacity = 0;
+                    other._owned = false;
+                }
+                return *this;
+            }
+            
+            // Destructor - properly destruct objects using std::destroy_n before freeing memory
+            inline ~buf() {
+                if (_owned && data_ptr) {
+                    // Use std::destroy_n to call destructors for all constructed objects
+                    std::destroy_n(data_ptr, data_capacity);
+                    ::operator delete(data_ptr);
+                    data_ptr = nullptr;
+                }
+            }
+            
+            // Conversion to span
+            inline operator std::span<T>() {
+                return std::span<T>(data_ptr, data_size);
+            }
+
+            // Conversion to const span
+            inline operator std::span<const T>() const {
+                return std::span<const T>(data_ptr, data_size);
+            }
+            
+            // Get pointer (transfers ownership)
+            [[nodiscard]] inline T* transfer() {
+                T* ptr = data_ptr;
+                data_ptr = nullptr;
+                data_size = 0;
+                data_capacity = 0;
+                _owned = false;
+                return ptr;
+            }
+            
+            // Set pointer (takes ownership if specified)
+            inline void reset(T* ptr, size_t size, size_t capacity, bool take_ownership = false) {
+                if (_owned && data_ptr) {
+                    // Destroy all objects
+                    std::destroy_n(data_ptr, data_capacity);
+                    ::operator delete(data_ptr);
+                }
+                
+                data_ptr = ptr;
+                data_size = size;
+                data_capacity = capacity;
+                _owned = take_ownership;
+            }
+            
+            // Getters
+            inline size_t size() const { return data_size; }
+            inline size_t capacity() const { return data_capacity; }
+            inline bool owned() const { return _owned; }
+            inline T* get() const { return data_ptr; }
+            
+            // Get span for the unused capacity (between size and capacity)
+            inline std::span<T> unused_span() {
+                if (data_ptr == nullptr || data_size >= data_capacity) {
+                    return std::span<T>(); // Empty span
+                }
+                return std::span<T>(data_ptr + data_size, data_capacity - data_size);
+            }
+
+            inline size_t size_increase(size_t size_inc) {
+                return data_size + size_inc;
+            }
+            
+            // Add operator bool to check if the buffer is valid
+            inline explicit operator bool() const {
+                return data_ptr != nullptr;
+            }
+            
+        private:
+            T* data_ptr;          // Pointer to data
+            size_t data_size;     // Current size
+            size_t data_capacity; // Total capacity
+            bool _owned;          // Whether this buffer owns the memory
+        };
+
+        // -------------------------------coroutine core--------------------------------
 
 #include "internal/lowlevel.h"
 
@@ -399,7 +570,7 @@ namespace io
                 return awaiter->no_tm.err;
             }
             inline bool isSet() {
-                return awaiter->bit_set & awaiter->set_lock;
+                return awaiter->bit_set & (awaiter->set_lock & awaiter->occupy_lock);
             }
             enum class status_t{
                 null = 0,
@@ -436,7 +607,7 @@ namespace io
             void decons() noexcept;
         };
 
-        //future with data.
+        //future with data. Not moveable and copyable.
         template<typename T>
             requires (!std::is_same_v<T, void>)
         struct future_with : future {
@@ -511,6 +682,7 @@ namespace io
             bool set();
             bool set_later();
         private:
+            promise<void> getPromise() = delete;
             void decons() noexcept;
         };
 
@@ -646,585 +818,6 @@ namespace io
             std::atomic<lowlevel::awaiter*> awaiter = nullptr;
             void decons(lowlevel::awaiter* exchange_ptr = nullptr) noexcept;
         };
-
-        //single manager(thread) internal channel
-        // Not Thread safe.
-        // UB: Visit a std::span that was got by the previous operator>>() after operator<<() or co_await.
-        // When co_await the future of get_span() (alias operator>>()), the awaiter must be triggered when the future turns to resolve immediately. Otherwise, the span got by the future will be invalid.
-        template <typename T>
-            requires std::is_move_constructible_v<T>
-        struct chan {
-            __IO_INTERNAL_HEADER_PERMISSION
-            //the lifitime of span_guard must be longer than chan.
-            struct span_guard{
-                friend chan;
-                inline void commit() {
-                    if (channel)
-                    {
-                        channel->get_commit();
-                        channel = nullptr;
-                    }
-                }
-                inline ~span_guard() {
-                    commit();
-                }
-                std::span<T> span;
-                inline span_guard() {}
-                span_guard(span_guard&) = delete;
-                void operator =(span_guard&) = delete;
-                void operator =(span_guard&&) = delete;
-            private:
-                chan<T> *channel = nullptr;
-            };
-            inline future operator>>(span_guard& data_out) {
-                return get_span(data_out);
-            }
-            inline future operator<<(std::span<T>& data_in) {
-                return put_in(data_in);
-            }
-            //Future will not resolve until the span gets enough data.
-            inline void get_and_copy(std::span<T> where_copy, future_with<std::span<T>>& ret){
-                chan_base* base = this->getPtr();
-                if (isClosed())
-                {
-                    getClosedFuture2(base, ret);
-                    return;
-                }
-                ret.data = where_copy;
-                if (base->status != chan_base::status_t::recv_block)
-                {
-                    //find in buffer
-                    std::span<T> span_buf = base->get_out(ret.data.size());
-                    if (span_buf.size() != 0 || base->capacity == 0)
-                    {
-                        std::copy(
-                            std::make_move_iterator(span_buf.begin()),
-                            std::make_move_iterator(span_buf.end()),
-                            ret.data.begin()
-                        );
-                        //another side of ring buffer
-                        ret.data = ret.data.subspan(span_buf.size());
-                        if (ret.data.size() != 0)
-                        {
-                            std::span<T> span_buf = base->get_out(ret.data.size());
-                            if (span_buf.size() != 0)
-                            {
-                                std::copy(
-                                    std::make_move_iterator(span_buf.begin()),
-                                    std::make_move_iterator(span_buf.end()),
-                                    ret.data.begin()
-                                );
-                                ret.data = ret.data.subspan(span_buf.size());
-                            }
-                        }
-                        //if send is blocking, move the waiting coroutine data into the copy place first.
-                        if (ret.data.size() != 0 && base->status == chan_base::status_t::send_block)
-                        {
-                            while (base->waiting.size())
-                            {
-                                auto& [prom, is_copy] = *(base->waiting.begin());
-                                if (prom.valid() == false)
-                                {
-                                    base->waiting.erase(base->waiting.begin());
-                                    continue;
-                                }
-                                else
-                                {
-                                    std::span<T>* span = prom.data();
-                                    if (ret.data.size() <= span->size())
-                                    {
-                                        std::copy(
-                                            std::make_move_iterator(span->begin()),
-                                            std::make_move_iterator(span->begin() + ret.data.size()),
-                                            ret.data.begin()
-                                        );
-                                        *span = span->subspan(ret.data.size());
-                                        ret.data = {};
-                                        //out span is full. if send is blocking still, move the waiting coroutine data into the buffer then.
-                                        break;
-                                    }
-                                    else
-                                    {
-                                        std::copy(
-                                            std::make_move_iterator(span->begin()),
-                                            std::make_move_iterator(span->end()),
-                                            ret.data.begin()
-                                        );
-                                        ret.data = ret.data.subspan(span->size());
-                                        prom.resolve_later();
-                                        base->waiting.erase(base->waiting.begin());
-                                    }
-                                }
-                            }
-                        }
-                        //move the waiting coroutine data into the buffer then.
-                        while (base->waiting.size())
-                        {
-                            auto& [prom, is_copy] = *(base->waiting.begin());
-                            if (prom.valid() == false)
-                            {
-                                base->waiting.erase(base->waiting.begin());
-                                continue;
-                            }
-                            else
-                            {
-                                std::span<T>* span = prom.data();
-                                span_buf = base->get_in(span->size());
-                                if (span_buf.size() == span->size())
-                                {
-                                    std::copy(
-                                        std::make_move_iterator(span->begin()),
-                                        std::make_move_iterator(span->begin() + span_buf.size()),
-                                        span_buf.begin()
-                                    );
-                                    prom.resolve_later();
-                                    base->waiting.erase(base->waiting.begin());
-                                }
-                                else // buf will be full after move in.
-                                {
-                                    std::copy(
-                                        std::make_move_iterator(span->begin()),
-                                        std::make_move_iterator(span->begin() + span_buf.size()),
-                                        span_buf.begin()
-                                    );
-                                    *span = span->subspan(span_buf.size());
-                                    return getResolvedFuture2(base, ret);
-                                }
-                            }
-                        }
-                        base->status = chan_base::status_t::normal;
-                        if (ret.data.size() == 0)
-                            return getResolvedFuture2(base, ret);
-                    }
-                }
-                else
-                {
-                    base->erase_invalid();
-                }
-
-                //block wait recv
-                base->status = chan_base::status_t::recv_block;
-                promise<std::span<T>> prom = base->mngr->make_future(ret, &ret.data);
-                base->waiting.emplace_back(std::move(prom), true);
-            }
-            //Once the channel gets any data, future resolve immediately.
-            inline future get_span(span_guard& data_out) {
-                chan_base* base = this->getPtr();
-                if (isClosed()) return getClosedFuture(base);
-                data_out.commit();
-                if (base->status != chan_base::status_t::recv_block)
-                {
-                    //find in buffer
-                    data_out.span = base->get_out(std::numeric_limits<uint64_t>::max());
-                    if (data_out.span.size() != 0)
-                    {
-                        //if send is blocking, move the waiting coroutine data into the buffer later.
-                        data_out.channel = this;
-                        return getResolvedFuture(base);
-                    }
-                }
-                else
-                {
-                   base->erase_invalid();
-                }
-
-                //block wait recv
-                base->status = chan_base::status_t::recv_block;
-                future ret;
-                promise<std::span<T>> prom = base->mngr->make_future(ret, &data_out.span);
-                base->waiting.emplace_back(std::move(prom), false);
-                return ret;
-            }
-            inline future put_in(std::span<T>& data_in) {
-                chan_base* base = this->getPtr();
-                if (isClosed()) return getClosedFuture(base);
-                assert(base->closed == false || !"channel ERROR: channel has been closed!");
-                if (base->status != chan_base::status_t::send_block)
-                {
-                    while (base->waiting.size())
-                    {
-                        auto& [prom, is_copy] = *(base->waiting.begin());
-                        if (prom.valid() == false)
-                        {
-                            base->waiting.erase(base->waiting.begin());
-                            continue;
-                        }
-                        else
-                        {
-                            if (is_copy == false)
-                            {
-                                *prom.data() = data_in;
-                                auto prom_copy = std::move(prom);
-                                base->waiting.erase(base->waiting.begin());
-                                prom_copy.resolve();
-                                return getResolvedFuture(base);
-                            }
-                            std::span<T>* span = prom.data();
-                            if (data_in.size() >= span->size())
-                            {
-                                std::copy(
-                                    std::make_move_iterator(data_in.begin()),
-                                    std::make_move_iterator(data_in.begin() + span->size()),
-                                    span->begin()
-                                );
-                                data_in = data_in.subspan(span->size());
-                                prom.resolve_later();
-                                base->waiting.erase(base->waiting.begin());
-                            }
-                            else // data_in will be depleted after move out.
-                            {
-                                std::copy(
-                                    std::make_move_iterator(data_in.begin()),
-                                    std::make_move_iterator(data_in.end()),
-                                    span->begin()
-                                );
-                                *span = span->subspan(data_in.size());
-                                return getResolvedFuture(base);
-                            }
-                        }
-                    }
-                    base->status = chan_base::status_t::normal;
-                    if (data_in.size() == 0)
-                        return getResolvedFuture(base);
-                    else
-                    {
-                        std::span<T> span_buf = base->get_in(data_in.size());
-                        if (span_buf.size() != 0)
-                        {
-                            std::copy(
-                                std::make_move_iterator(data_in.begin()),
-                                std::make_move_iterator(data_in.begin() + span_buf.size()),
-                                span_buf.begin()
-                            );
-                            //another side of ring buffer
-                            data_in = data_in.subspan(span_buf.size());
-                            if (data_in.size() != 0)
-                            {
-                                std::span<T> span_buf = base->get_in(data_in.size());
-                                if (span_buf.size() != 0)
-                                {
-                                    std::copy(
-                                        std::make_move_iterator(data_in.begin()),
-                                        std::make_move_iterator(data_in.begin() + span_buf.size()),
-                                        span_buf.begin()
-                                    );
-                                    data_in = data_in.subspan(span_buf.size());
-                                    if (data_in.size() == 0)
-                                        return getResolvedFuture(base);
-                                }
-                            }
-                            else
-                            {
-                                return getResolvedFuture(base);
-                            }
-                        }
-                    }
-                }
-                else
-                {
-                    base->erase_invalid();
-                }
-
-                //block wait send
-                base->status = chan_base::status_t::send_block;
-                future ret;
-                promise<std::span<T>> prom = base->mngr->make_future(ret, &data_in);
-                base->waiting.emplace_back(std::move(prom), false );
-                return ret;
-            }
-            inline bool isClosed() {
-                return this->getPtr()->closed;
-            }
-            inline bool isFull() {
-                return this->getPtr()->is_full;
-            }
-            inline size_t size() {
-                auto base = this->getPtr();
-                if (base->is_full)
-                    return base->capacity;
-                if (base->write_pos >= base->read_pos)
-                    return base->write_pos - base->read_pos;
-                else
-                    return (base->capacity - (base->write_pos - base->read_pos));
-            }
-            inline size_t capacity() {
-                return this->getPtr()->capacity;
-            }
-            //close, this will deconstruct all element in buffer, and resume all coroutines.
-            inline void close() {
-                return this->getPtr()->close();
-            }
-            struct err_category : public std::error_category {
-                inline const char* name() const noexcept override {
-                    return "channel error";
-                }
-                inline std::string message(int ev) const override {
-                    switch (ev) {
-                    case 1:
-                        return "Error 1: Channel closed!";
-                    default:
-                        return "Unknown error!";
-                    }
-                }
-                static const std::error_category& global() {
-                    thread_local err_category instance;
-                    return instance;
-                }
-            };
-        private:
-            inline void get_commit() {
-                chan_base* base = this->getPtr();
-                if (isClosed()) return;
-                //if send is blocking, move the waiting coroutine data into the buffer.
-                if (base->status == chan_base::status_t::send_block)
-                {
-                    while (base->waiting.size())
-                    {
-                        auto& [prom, is_copy] = *(base->waiting.begin());
-                        if (prom.valid() == false)
-                        {
-                            base->waiting.erase(base->waiting.begin());
-                            continue;
-                        }
-                        else
-                        {
-                            std::span<T>* span = prom.data();
-                            std::span<T> span_buf = base->get_in(span->size());
-                            if (span_buf.size() == span->size())
-                            {
-                                std::copy(
-                                    std::make_move_iterator(span->begin()),
-                                    std::make_move_iterator(span->begin() + span_buf.size()),
-                                    span_buf.begin()
-                                );
-                                prom.resolve_later();
-                                base->waiting.erase(base->waiting.begin());
-                            }
-                            else // buf will be full after move in.
-                            {
-                                std::copy(
-                                    std::make_move_iterator(span->begin()),
-                                    std::make_move_iterator(span->begin() + span_buf.size()),
-                                    span_buf.begin()
-                                );
-                                *span = span->subspan(span_buf.size());
-                                return;
-                            }
-                        }
-                    }
-                    base->status = chan_base::status_t::normal;
-                }
-            }
-            std::shared_ptr<void> _base;    //type erasure ringbuf. we assert that this shared_ptr cannot be null.
-            struct chan_base {
-                struct waiting_t {
-                    promise<std::span<T>> prom;
-                    bool is_copy;
-                };
-                std::deque<waiting_t> waiting;
-                manager* mngr;
-                enum class status_t :char {
-                    normal = 0,
-                    send_block = 1,
-                    recv_block = 2
-                }status;
-                bool closed = false;
-
-                bool is_full;
-                size_t capacity;
-                size_t write_pos = 0;
-                size_t read_pos = 0;
-                inline void erase_invalid() {
-                    if (waiting.size() == 0)
-                        return;
-                    for (auto iter = waiting.begin(); iter != waiting.end(); iter++)
-                    {
-                        auto& [prom, is_copy] = *iter;
-                        if (prom.valid() == false)
-                        {
-                            iter = waiting.erase(iter);
-                            if (iter == waiting.end())
-                                break;
-                        }
-                    }
-                }
-                inline std::span<T> get_in(size_t size) {
-                    if (this->is_full || size == 0) {
-                        return std::span<T>();
-                    }
-
-                    size_t avail_contiguous = 0;
-
-                    if (this->write_pos > this->read_pos) {
-                        //split into 2 blocks. needs to call again next turn.
-                        avail_contiguous = capacity - this->write_pos;
-                    }
-                    else if (this->write_pos == this->read_pos) {
-                        avail_contiguous = capacity - this->write_pos;
-                    }
-                    else {
-                        //continuous memory.
-                        avail_contiguous = this->read_pos - this->write_pos;
-                    }
-
-                    size_t len = std::min(size, avail_contiguous);
-
-                    std::span<T> result((T*)(this + 1) + this->write_pos, len);
-                    this->write_pos += len;
-                    if (this->write_pos >= capacity) {
-                        this->write_pos = 0;
-                    }
-
-                    this->is_full = (this->write_pos == this->read_pos);
-
-                    return result;
-                }
-                inline std::span<T> get_out(size_t size) {
-                    if ((this->write_pos == this->read_pos && !this->is_full) || size == 0) {
-                        return std::span<T>();
-                    }
-
-                    size_t avail_contiguous = 0;
-
-                    if (this->read_pos > this->write_pos) {
-                        //split into 2 blocks. needs to call again next turn.
-                        avail_contiguous = capacity - this->read_pos;
-                    }
-                    else if (this->read_pos == this->write_pos && this->is_full) {
-                        avail_contiguous = capacity - this->read_pos;
-                    }
-                    else {
-                        //continuous memory.
-                        avail_contiguous = this->write_pos - this->read_pos;
-                    }
-
-                    size_t len = std::min(size, avail_contiguous);
-
-                    std::span<T> result((T*)(this + 1) + this->read_pos, len);
-                    this->read_pos += len;
-                    if (this->read_pos >= capacity) {
-                        this->read_pos = 0;
-                    }
-
-                    this->is_full = false;
-
-                    return result;
-                }
-                inline void close() {
-                    T* buffer = (T*)(this + 1);
-                    while (waiting.size())
-                    {
-                        auto& [prom, is_copy] = *(waiting.begin());
-                        prom.reject_later(std::error_code(1, err_category::global()));
-                        waiting.erase(waiting.begin());
-                    }
-                    std::destroy_n(buffer, capacity);
-                }
-                inline static void deleter(void* ptr) {
-                    chan_base* base = (chan_base*)ptr;
-                    base->~chan_base();
-                    operator delete(ptr);
-                }
-                inline ~chan_base() {
-                    if (this->closed == false)
-                        close();
-                }
-            };
-            inline future getResolvedFuture(chan_base* base) {
-                future ret;
-                promise<> prom = base->mngr->make_future(ret);
-                prom.resolve();
-                return ret;
-            }
-            inline future getClosedFuture(chan_base* base) {
-                future ret;
-                promise<> prom = base->mngr->make_future(ret);
-                prom.reject_later(std::error_code(1, err_category::global()));
-                return ret;
-            }
-            inline void getResolvedFuture2(chan_base* base, future_with<std::span<T>>& ret) {
-                promise<> prom = base->mngr->make_future(ret);
-                prom.resolve();
-            }
-            inline void getClosedFuture2(chan_base* base, future_with<std::span<T>>& ret) {
-                promise<> prom = base->mngr->make_future(ret);
-                prom.reject_later(std::error_code(1, err_category::global()));
-            }
-            inline chan_base* getPtr() { return (chan_base*)_base.get(); }
-            inline T* getPtrContent() { return (T*)((chan_base*)_base.get() + 1); }
-            //use make_chan
-            //forward constructor of ringbuf
-            inline chan(size_t size, manager* mngr, std::initializer_list<T> init_list) {
-                _base = std::shared_ptr<void>(::operator new(sizeof(chan_base) + size * sizeof(T)), chan_base::deleter);
-                assert(init_list.size() <= size || !"make_chan ERROR: Too many initialize args!");
-                chan_base* base = getPtr();
-                new(base)chan_base();
-                base->mngr = mngr;
-                if (init_list.size() == 0)
-                {
-                    base->status = chan_base::status_t::recv_block;
-                }
-                else if (init_list.size() == size)
-                {
-                    base->status = chan_base::status_t::send_block;
-                }
-                else
-                {
-                    base->status = chan_base::status_t::normal;
-                }
-                base->is_full = (init_list.size() == size);
-                base->capacity = size;
-                base->write_pos = init_list.size();
-                T* buffer = getPtrContent();
-                std::uninitialized_copy(
-                    init_list.begin(),
-                    init_list.end(),
-                    buffer
-                );
-                std::uninitialized_default_construct_n(
-                    buffer + init_list.size(),
-                    size - init_list.size()
-                );
-            }
-        };
-
-        // receive only channel
-        template <typename T>
-            requires std::is_move_constructible_v<T>
-        struct chan_r {
-            inline future operator>>(chan<T>::span_guard& data_out) { return get_span(data_out); }
-            inline void get_and_copy(std::span<T> where_copy, future_with<std::span<T>>& ret){ return c.get_and_copy(where_copy, ret); }
-            inline future get_span(chan<T>::span_guard& data_out) { return c.get_span(data_out); }
-            inline chan_r(chan<T>& r) : c(r) {}
-            inline chan_r(chan<T>&& r) : c(r) {}
-        private:
-            chan<T> c;
-        };
-
-        // send only channel
-        template <typename T>
-            requires std::is_move_constructible_v<T>
-        struct chan_s {
-            inline future operator<<(std::span<T>& data_in) { return put_in(data_in); }
-            inline future put_in(std::span<T>& data_in) { return c.put_in(data_in); }
-            inline chan_s(chan<T>& r) : c(r) {}
-            inline chan_s(chan<T>&& r) : c(r) {}
-        private:
-            chan<T> c;
-        };
-
-        //async channel
-        // Thread safe.
-        template <typename T>
-        struct async_chan { };
-
-        // receive only channel
-        template <typename T>
-        struct async_chan_r { };
-
-        // send only channel
-        template <typename T>
-        struct async_chan_s { };
 
         struct get_fsm_t {};
         inline static constexpr get_fsm_t get_fsm;
@@ -1741,13 +1334,6 @@ namespace io
                 ret.awaiter = fut.awaiter;
                 return ret;
             }
-            template <typename T_chan>
-            inline chan<T_chan> make_chan(size_t size, std::initializer_list<T_chan> init_list = {}) {
-                chan<T_chan> ret(size, this, init_list);
-                return ret;
-            }
-            template <typename T_chan>
-            inline async_chan<T_chan> make_async_chan() {}
             manager(const manager&) = delete;
             manager& operator=(const manager&) = delete;
             manager(manager&& right) = delete;
@@ -1998,8 +1584,8 @@ namespace io
             // Concept to check if a type is a valid error handler for pipeline
             template <typename T>
             concept PipelineErrorHandler =
-                requires(T handler, int which, bool output_or_input) {
-                    { handler(which, output_or_input) } -> std::same_as<void>;
+                requires(T handler, int which, bool output_or_input, std::error_code ec) {
+                    { handler(which, output_or_input, ec) } -> std::same_as<void>;
             };
 
             template <typename F>
@@ -2063,9 +1649,9 @@ namespace io
             }
 
             template <typename T_FSM>
-            inline decltype(auto) spawn(T_FSM& fsm)&& {
-                pipeline_started<std::remove_reference_t<decltype(*this)>, true, void> ret =
-                    fsm.spawn_now([](decltype(*this) t)->fsm_func<void> {
+            inline decltype(auto) spawn(T_FSM& _fsm)&& {
+                pipeline_started<std::remove_reference_t<decltype(*this)>, true, std::monostate> ret =
+                    _fsm.spawn_now([](decltype(*this) t)->fsm_func<void> {
                     pipeline_started<std::remove_reference_t<decltype(*this)>, false, std::monostate> pipeline_s(std::move(t));
                     while (1)
                     {
@@ -2077,9 +1663,9 @@ namespace io
 
             template <typename T_FSM, typename ErrorHandler>
                 requires trait::PipelineErrorHandler<ErrorHandler>
-            inline decltype(auto) spawn(T_FSM& fsm, ErrorHandler&& e)&& {
-                pipeline_started<std::remove_reference_t<decltype(*this)>, true, ErrorHandler> ret =
-                    fsm.spawn_now([](decltype(*this) t, ErrorHandler&& e)->fsm_func<void> {
+            inline decltype(auto) spawn(T_FSM& _fsm, ErrorHandler&& e)&& {
+                pipeline_started<std::remove_reference_t<decltype(*this)>, true, std::monostate> ret =
+                    _fsm.spawn_now([](decltype(*this) t, ErrorHandler&& e)->fsm_func<void> {
                     pipeline_started<std::remove_reference_t<decltype(*this)>, false, ErrorHandler> pipeline_s(std::move(t), std::forward<ErrorHandler>(e));
                     while (1)
                     {
@@ -2161,7 +1747,7 @@ namespace io
                             if (front_future.getErr()) {
                                 if constexpr (std::is_same_v<ErrorHandler, std::monostate> == false)
                                 {
-                                    errorHandler(which, true);
+                                    errorHandler(which, true, front_future.getErr());
                                 }
                                 turn = 0;
                             }
@@ -2189,10 +1775,10 @@ namespace io
                             }
                         }
                         else if (turn == 3) {
-                            if (front_future.getErr()) {
+                            if (rear_future.getErr()) {
                                 if constexpr (std::is_same_v<ErrorHandler, std::monostate> == false)
                                 {
-                                    errorHandler(which, false);
+                                    errorHandler(which, false, rear_future.getErr());
                                 }
                             }
                             turn = 0;
@@ -2206,7 +1792,7 @@ namespace io
                             if (front_future.getErr()) {
                                 if constexpr (std::is_same_v<ErrorHandler, std::monostate> == false)
                                 {
-                                    errorHandler(which, true);
+                                    errorHandler(which, true, front_future.getErr());
                                 }
                                 turn = 0;
                             }
@@ -2232,7 +1818,7 @@ namespace io
                             if (rear_future.getErr()) {
                                 if constexpr (std::is_same_v<ErrorHandler, std::monostate> == false)
                                 {
-                                    errorHandler(which, false);
+                                    errorHandler(which, false, rear_future.getErr());
                                 }
                             }
                             turn = 2;
@@ -2464,6 +2050,8 @@ namespace io
                 : _pipeline(std::move(pipe)), errorHandler(std::forward<ErrorHandler>(e)) {
             }
 
+            pipeline_started(fsm_handle<void>&& handle) : std::conditional_t<individual_coro, fsm_handle<void>, std::monostate>(std::move(handle)) {}
+
             // Delete copy constructor and assignment
             pipeline_started(const pipeline_started&) = delete;
             pipeline_started& operator=(const pipeline_started&) = delete;
@@ -2484,7 +2072,7 @@ namespace io
             }
 
         private:
-            // Delete move constructor and assignment
+            // Delete user move constructor and assignment
             pipeline_started(pipeline_started&&) = default;
             pipeline_started& operator=(pipeline_started&&) = default;
 
@@ -2516,6 +2104,8 @@ namespace io
             //default struct of rpc
             template <typename Req, typename Resp>
             struct def {
+                using request_type = Req;
+                using response_type = Resp;
                 def(std::function<Resp(Req)> h) : handler(h) {}
                 def() = default;
                 
@@ -2553,7 +2143,7 @@ namespace io
                 } else if (default_handler_) {
                     return default_handler_(req);
                 } else {
-                    throw std::runtime_error("No handler found for key and no default handler provided");
+                    assert(!"rpc ERROR: No handler found for key and no default handler provided");
                 }
             }
 
@@ -2568,399 +2158,58 @@ namespace io
             }
             
             template <typename Def>
+                requires 
+            (std::is_same_v<Def, typename rpc<>::def<typename Def::request_type, typename Def::response_type>> &&
+                std::is_convertible_v<request_type, typename Def::request_type> &&
+                std::is_convertible_v<typename Def::response_type, response_type>
+                    )
             inline void process_args(const Def& default_handler) {
-                if constexpr (std::is_same_v<Def, typename rpc<>::template def<request_type, response_type>> ||
-                             std::is_convertible_v<decltype(default_handler.handler), handler_type>) {
-                    if (default_handler) {
-                        default_handler_ = default_handler.handler;
-                    }
-                } else {
-                    static_assert(std::is_same_v<Def, std::pair<key_type, handler_type>>, 
-                        "RPC construct ERROR: def function signature must be response_type(request_type)");
+                if (default_handler) {
+                    default_handler_ = default_handler.handler;
                 }
             }
-            
-            inline void process_args() {}
+
+            inline void process_args(){}
         };
 
-
-
-        // -------------------------------socket/protocol impl--------------------------------
-
-        // hardware/system io socket
-        namespace sock {
-            struct tcp {
-                __IO_INTERNAL_HEADER_PERMISSION;
-                friend class std::optional<tcp>;
-                using prot_output_type = std::span<char>;
-                using prot_input_type = std::span<char>;
-                static constexpr size_t default_buffer_size = 1024 * 16;
-                template <typename T_FSM>
-                inline tcp(fsm<T_FSM>& state_machine) : manager(state_machine.getManager()), asio_sock(manager->io_ctx) {
-                    buffer.resize(default_buffer_size);
-                }
-
-                inline void setBufSize(size_t size) {
-                    buffer.resize(size);
-                }
-
-                //receive function
-                inline void operator >>(future_with<std::span<char>>& fut) {
-                    promise<std::span<char>> prom = manager->make_future(fut, &fut.data);
-                    if (!asio_sock.is_open()) {
-                        prom.reject_later(std::make_error_code(std::errc::not_connected));
-                        return;
-                    }
-
-                    asio_sock.async_wait(asio::ip::tcp::socket::wait_read,
-                        [this, prom = std::move(prom)](const std::error_code& ec) mutable {
-                            if (ec) {
-                                prom.reject_later(ec);
-                                return;
-                            }
-
-                            std::error_code read_ec;
-                            size_t bytes_read = asio_sock.read_some(asio::buffer(buffer), read_ec);
-                            if (read_ec) {
-                                prom.reject_later(read_ec);
-                                return;
-                            }
-
-                            auto ptr = prom.resolve_later();
-                            if (ptr)
-                            {
-                                *ptr = std::span<char>(buffer.data(), bytes_read);
-                            }
-                        });
-                }
-
-                //send function
-                inline future operator <<(const std::span<char>& span) {
-                    future fut;
-                    promise<> prom = manager->make_future(fut);
-                    if (!asio_sock.is_open()) {
-                        prom.reject_later(std::make_error_code(std::errc::not_connected));
-                        return fut;
-                    }
-
-                    // Try immediate non-blocking send first
-                    std::error_code write_ec;
-                    size_t bytes_written = asio_sock.write_some(asio::buffer(span.data(), span.size()), write_ec);
-                    
-                    // Check if we wrote everything successfully
-                    if (!write_ec && bytes_written == span.size()) {
-                        prom.resolve_later();
-                        return fut;
-                    }
-                    
-                    // If we got an error other than would_block, reject
-                    if (write_ec && write_ec != asio::error::would_block) {
-                        prom.reject_later(write_ec);
-                        return fut;
-                    }
-                    
-                    // Create a copy of remaining data using unique_ptr
-                    auto remaining_data = std::make_unique<std::string>(
-                        span.data() + bytes_written, 
-                        span.size() - bytes_written
-                    );
-                    
-                    // Use helper function to handle recursive sending
-                    async_send_remaining(std::move(remaining_data), std::move(prom));
-                    
-                    return fut;
-                }
-
-                inline future connect(const asio::ip::tcp::endpoint& endpoint) {
-                    future fut;
-                    promise<> prom = manager->make_future(fut);
-
-                    asio_sock.async_connect(endpoint,
-                        [this, prom = std::move(prom)](const std::error_code& ec) mutable {
-                            if (ec) {
-                                prom.reject_later(ec);
-                            }
-                            else {
-                                // Set non-blocking mode after successful connection
-                                std::error_code nb_ec;
-                                asio_sock.non_blocking(true, nb_ec);
-                                prom.resolve_later();
-                            }
-                        });
-
-                    return fut;
-                }
-
-                inline void close() {
-                    if (asio_sock.is_open()) {
-                        std::error_code ec;
-                        asio_sock.close(ec);
-                    }
-                }
-
-                IO_MANAGER_FORWARD_FUNC(asio_sock, native_handle);
-                IO_MANAGER_FORWARD_FUNC(asio_sock, is_open);
-                IO_MANAGER_FORWARD_FUNC(asio_sock, remote_endpoint);
-                IO_MANAGER_FORWARD_FUNC(asio_sock, local_endpoint);
-                IO_MANAGER_FORWARD_FUNC(asio_sock, available);
-                inline tcp(asio::ip::tcp::socket&& sock, size_t size, io::manager* mngr) :manager(mngr), asio_sock(std::move(sock)) {
-                    buffer.resize(size);
-                }
-            private:
-                // Helper function to recursively send remaining data
-                void async_send_remaining(std::unique_ptr<std::string> data, promise<> prom) {
-                    asio_sock.async_write_some(
-                        asio::buffer(data->data(), data->size()),
-                        [this, data = std::move(data), prom = std::move(prom)]
-                        (const std::error_code& ec, size_t bytes_sent) mutable {
-                            if (ec) {
-                                prom.reject_later(ec);
-                                return;
-                            }
-
-                            if (bytes_sent < data->size()) {
-                                // Still data left to send - update the buffer and recurse
-                                data->erase(0, bytes_sent);
-                                async_send_remaining(std::move(data), std::move(prom));
-                            }
-                            else {
-                                // All data sent successfully
-                                prom.resolve_later();
-                            }
-                        });
-                }
-                io::manager* manager = nullptr;
-                std::string buffer;
-                asio::ip::tcp::socket asio_sock;
-            };
-
-            struct tcp_accp {
-                __IO_INTERNAL_HEADER_PERMISSION;
-                using prot_output_type = std::optional<tcp>;
-                template <typename T_FSM>
-                inline tcp_accp(fsm<T_FSM>& state_machine) : manager(state_machine.getManager()), acceptor(manager->io_ctx), sock(manager->io_ctx) {}
-
-                inline void setBufSize(size_t size) {
-                    buffer_size = size;
-                }
-
-                inline bool bind_and_listen(const asio::ip::tcp::endpoint& endpoint, int backlog = 10) {
-                    std::error_code ec;
-                    acceptor.open(endpoint.protocol(), ec);
-                    if (ec) {
-                        return false;
-                    }
-
-                    acceptor.set_option(asio::ip::tcp::acceptor::reuse_address(true), ec);
-                    if (ec) {
-                        return false;
-                    }
-
-                    acceptor.bind(endpoint, ec);
-                    if (ec) {
-                        return false;
-                    }
-
-                    acceptor.listen(backlog, ec);
-                    if (ec) {
-                        return false;
-                    }
-                    
-                    return !ec;
-                }
-
-                inline void operator >>(future_with<std::optional<tcp>>& fut) {
-                    promise<std::optional<tcp>> prom = manager->make_future(fut, &fut.data);
-                    if (!acceptor.is_open()) {
-                        fut.getPromise().reject_later(std::make_error_code(std::errc::not_connected));
-                        return;
-                    }
-
-                    acceptor.async_accept(sock,
-                        [this, prom = std::move(prom)](const std::error_code& ec) mutable {
-                            if (ec) {
-                                prom.reject_later(ec);
-                                return;
-                            }
-
-                            // Set the accepted socket to non-blocking
-                            std::error_code nb_ec;
-                            sock.non_blocking(true, nb_ec);
-                            if (nb_ec) {
-                                prom.reject_later(nb_ec);
-                                return;
-                            }
-
-                            auto ptr = prom.resolve_later();
-                            if (ptr)
-                            {
-                                ptr->emplace(std::move(sock), buffer_size, manager);
-                            }
-                            else
-                            {
-                                std::error_code ec;
-                                sock.close(ec);
-                            }
-                        });
-                }
-
-                inline void close() {
-                    if (acceptor.is_open()) {
-                        std::error_code ec;
-                        acceptor.close(ec);
-                    }
-                }
-
-                IO_MANAGER_FORWARD_FUNC(acceptor, is_open);
-                IO_MANAGER_FORWARD_FUNC(acceptor, local_endpoint);
-
-            private:
-                io::manager* manager = nullptr;
-                size_t buffer_size = tcp::default_buffer_size;
-                asio::ip::tcp::socket sock;
-                asio::ip::tcp::acceptor acceptor;
-            };
-
-            struct udp {
-                __IO_INTERNAL_HEADER_PERMISSION;
-                using prot_output_type = std::pair<std::span<char>, asio::ip::udp::endpoint>;
-                using prot_input_type = std::pair<std::span<char>, asio::ip::udp::endpoint>;
-                static constexpr size_t default_buffer_size = 1024 * 16;
-                template <typename T_FSM>
-                inline udp(fsm<T_FSM>& state_machine) : manager(state_machine.getManager()), asio_sock(manager->io_ctx) {
-                    buffer.resize(default_buffer_size);
-                }
-
-                inline void setBufSize(size_t size) {
-                    buffer.resize(size);
-                }
-
-                //receive function
-                inline void operator >>(future_with<std::pair<std::span<char>, asio::ip::udp::endpoint>>& fut) {
-                    auto prom = manager->make_future(fut, &fut.data);
-                    if (!asio_sock.is_open()) {
-                        prom.reject_later(std::make_error_code(std::errc::not_connected));
-                        return;
-                    }
-
-                    asio_sock.async_receive_from(asio::buffer(buffer), remote_endpoint,
-                        [this, prom = std::move(prom)](const std::error_code& ec, size_t bytes_read) mutable {
-                            if (ec) {
-                                prom.reject_later(ec);
-                                return;
-                            }
-
-                            auto ptr = prom.resolve_later();
-                            if (ptr) {
-                                *ptr = std::make_pair(std::span<char>(buffer.data(), bytes_read), remote_endpoint);
-                            }
-                        });
-                }
-
-                //send function
-                inline future operator <<(const std::pair<std::span<char>, asio::ip::udp::endpoint>& span) {
-                    // Set non-blocking for newly created sockets
-                    std::error_code ec;
-                    asio_sock.non_blocking(true, ec);
-
-                    future fut;
-                    promise<> prom = manager->make_future(fut);
-                    if (!asio_sock.is_open()) {
-                        prom.reject_later(std::make_error_code(std::errc::not_connected));
-                        return fut;
-                    }
-
-                    // Try immediate non-blocking send first
-                    std::error_code write_ec;
-                    size_t bytes_written = asio_sock.send_to(
-                        asio::buffer(span.first.data(), span.first.size()), 
-                        span.second, 
-                        0, // flags
-                        write_ec
-                    );
-                    
-                    // For UDP, if we get a would_block, we should use async send
-                    // If we get any other error, fail immediately
-                    if (!write_ec && bytes_written == span.first.size()) {
-                        prom.resolve_later();
-                        return fut;
-                    }
-                    
-                    if (write_ec && write_ec != asio::error::would_block) {
-                        prom.reject_later(write_ec);
-                        return fut;
-                    }
-                    
-                    // Create a copy of data using unique_ptr
-                    auto data_copy = std::make_unique<std::string>(
-                        span.first.data(), span.first.size()
-                    );
-                    auto endpoint_copy = span.second;
-                    
-                    asio_sock.async_wait(asio::ip::udp::socket::wait_write,
-                        [this, data = std::move(data_copy), endpoint = endpoint_copy, prom = std::move(prom)]
-                        (const std::error_code& ec) mutable {
-                            if (ec) {
-                                prom.reject_later(ec);
-                                return;
-                            }
-
-                            std::error_code write_ec;
-                            asio_sock.send_to(
-                                asio::buffer(data->data(), data->size()), 
-                                endpoint, 
-                                0, // flags
-                                write_ec
-                            );
-                            
-                            if (write_ec) {
-                                prom.reject_later(write_ec);
-                            } else {
-                            prom.resolve_later();
-                            }
-                        });
-
-                    return fut;
-                }
-
-                inline bool bind(const asio::ip::udp::endpoint& endpoint) {
-                    std::error_code ec;
-                    asio_sock.open(endpoint.protocol(), ec);
-                    if (ec) {
-                        return false;
-                    }
-
-                    asio_sock.bind(endpoint, ec);
-                    if (ec) {
-                        return false;
-                    }
-                    return !ec;
-                }
-
-                inline void close() {
-                    if (asio_sock.is_open()) {
-                        std::error_code ec;
-                        asio_sock.close(ec);
-                    }
-                }
-
-                IO_MANAGER_FORWARD_FUNC(asio_sock, native_handle);
-                IO_MANAGER_FORWARD_FUNC(asio_sock, is_open);
-                IO_MANAGER_FORWARD_FUNC(asio_sock, local_endpoint);
-
-            private:
-                io::manager* manager = nullptr;
-                std::string buffer;
-                asio::ip::udp::socket asio_sock;
-                asio::ip::udp::endpoint remote_endpoint;
-            };
+        // blackhole adaptor
+        template<typename Out, typename In>
+        struct blackhole {
+            inline std::optional<In> operator()(const Out&) {
+                return std::nullopt;
+            }
         };
 
 #include "internal/definitions.h"
     }
 }
 
-// software simulated protocols
+
+
+// namespace io::sock -- hardware/system io socket
+#if IO_USE_ASIO
+#if __has_include("socket/asio/tcp.h")
+#include "socket/asio/tcp.h"
+#endif
+#if __has_include("socket/asio/tcp_accp.h")
+#include "socket/asio/tcp_accp.h"
+#endif
+#if __has_include("socket/asio/udp.h")
+#include "socket/asio/udp.h"
+#endif
+#endif
+
+
+
+// namespace io::prot -- software simulated protocols
+
+#if __has_include("protocol/chan.h")
+#include "protocol/chan.h"
+#endif
+
+#if __has_include("protocol/async_chan.h")
+#include "protocol/async_chan.h"
+#endif
 
 #if __has_include("protocol/rpc.h")
 #include "protocol/rpc.h"

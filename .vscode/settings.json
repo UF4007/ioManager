@@ -83,6 +83,7 @@
         "xtr1common": "cpp",
         "xtree": "cpp",
         "xutility": "cpp",
-        "complex": "cpp"
+        "complex": "cpp",
+        "*.ipp": "cpp"
     }
 }

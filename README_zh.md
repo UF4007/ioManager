@@ -519,7 +519,7 @@ struct my_protocol {
     using prot_output_type = OutputType; // 此协议产生的数据类型
     
     // 输出操作（实现输出协议）
-    // 可以是三种输出协议类型中的任何一种
+    // 可以是两种输出协议类型中的任何一种
     void operator>>(future_with<OutputType>& fut) {
         //operator>>需要负责future的构造
         io::promise<OutputType> promise = fsm.make_future(fut,&fut.data);
@@ -538,11 +538,13 @@ struct my_protocol {
 
 ### 管线机制
 
-管线其实就是把所有协议组成一个个出-入对（管线段），并且统一在某个协程中等待它们的future。
+管线其实就是把所有协议组成一个个出-入对（管线段），并且统一在某个协程中进行处理。
 
 1. **独立触发**：管线的每个段可以独立触发，并搬运数据，而不依赖前面或后面的段。
 
-2. **方向性**：数据在管线段中从输出协议流向输入协议，方向单一。
+2. **单向**：数据在管线段中从输出协议流向输入协议，方向单一。
+
+3. **有序循环**：管线段会首先读取输出协议，再写入输入协议，再读取输出协议，如此循环。若读取过程阻塞，则一定会先等待读取再写入；反之亦然。
 
 在管线中：
 - 第一个协议必须是输出协议
@@ -590,13 +592,20 @@ started_pipeline <= co_await +started_pipeline;
 
 ```cpp
 // 使用错误处理器启动管线
-auto started_pipeline = std::move(pipeline).start([](int which, bool output_or_input) {
-    std::cout << "管线段 " << which << " 发生错误" << 
-              << (output_or_input ? " (output)" : " (input)") << std::endl;
+auto started_pipeline = std::move(pipeline).start([](int which, bool output_or_input, std::error_code ec) {
+    std::cout << "管线段 " << which << " 发生错误" 
+              << (output_or_input ? " (output)" : " (input)")
+              << " - 错误: " << ec.message()
+              << " [代码: " << ec.value() << "]" << std::endl;
+    return true;
 });
 ```
 
-错误处理可调用体应该具有 `void(int, bool)` 的签名。若output_or_input为true，则表示发生错误的是管线段的出口端，否则为入口端。
+错误处理可调用体应该具有 `void(int, bool, std::error_code)` 的签名。参数含义：
+
+- `which`：发生错误的管线段序号
+- `output_or_input`：若为 true，则表示发生错误的是管线段的出口端，否则为入口端
+- `ec`：包含具体错误信息的错误代码对象
 
 另外，您可以直接将管线生成到一个会持续驱动它的协程中：
 
@@ -605,8 +614,10 @@ auto started_pipeline = std::move(pipeline).start([](int which, bool output_or_i
 auto pipeline_handle = std::move(pipeline).spawn(fsm);
 
 // 带错误处理器的生成
-auto pipeline_handle = std::move(pipeline).spawn(fsm, [](int which, bool output_or_input) {
-    std::cout << "管线段 " << which << " 发生错误" << std::endl;
+auto pipeline_handle = std::move(pipeline).spawn(fsm, [](int which, bool output_or_input, std::error_code ec) {
+    std::cout << "管线段 " << which << " 发生错误"
+              << (output_or_input ? " (output)" : " (input)")
+              << " - 错误: " << ec.message() << std::endl;
     return true;
 });
 ```

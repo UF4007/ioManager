@@ -43,53 +43,25 @@ io::fsm_func<void> coro_limit_test(int num)
     }
 }
 
-io::fsm_func<void> coro_multi_thread()
-{
-    auto& fsm = co_await io::get_fsm;
-
-    co_return;
-}
-
 io::fsm_func<void> coro_chan(size_t *count)
 {
     io::fsm<void> &fsm = co_await io::get_fsm;
-    io::chan<char> chan = fsm.make_chan<char>(1000);
+    io::chan<char> chan(fsm, 1000);
     io::fsm_handle<void> handle;
 
-    // is zero-copy ?
-    if (true && count == nullptr)
-    {
-        handle = fsm.spawn_now([](io::chan_r<char> chan, size_t *count) -> io::fsm_func<void>
-                               {
-            io::fsm<void>& fsm = co_await io::get_fsm;
-            while (1)
-            {
-                io::chan<char>::span_guard recv;        //zero copy span guard object.
-                co_await(chan >> recv);
-                if (count)
-                    *count += recv.span.size();
-                else
-                    std::cout << recv.span.data() << std::endl;
-            } }(chan, count));
-    }
-    else
-    {
-        handle = fsm.spawn_now([](io::chan_r<char> ch, size_t *count) -> io::fsm_func<void>
-                               {
+    handle = fsm.spawn_now([](io::chan_r<char> ch, size_t* count) -> io::fsm_func<void>
+        {
             std::string str;
             str.resize(1024 * 10);
             io::fsm<void>& fsm = co_await io::get_fsm;
             while (1)
             {
-                io::future_with<std::span<char>> futur;
-                ch.get_and_copy(std::span<char>(str), futur);
-                co_await futur;
+                co_await ch.get_and_copy(std::span<char>(str));
                 if (count)
                     *count += str.size();
                 else
                     std::cout << str << std::endl;
             } }(chan, count));
-    }
 
     while (1)
     {
@@ -97,6 +69,7 @@ io::fsm_func<void> coro_chan(size_t *count)
         std::span<char> send_span(send, sizeof(send));
         co_await (chan << send_span);
     }
+    co_return;
 }
 
 io::fsm_func<void> coro_chan_benchmark()
@@ -117,6 +90,306 @@ io::fsm_func<void> coro_chan_benchmark()
     std::cout << "Average throughput: " << mb_per_second << " MB/s" << std::endl;
 
     fsm.getManager()->spawn_later(coro_chan_benchmark()).detach();
+}
+
+io::fsm_func<void> coro_chan_construct_correct_test()
+{
+    // Class with construction/destruction tracking for testing
+    static int constructed = 0;
+    static int destroyed = 0;
+    static int moved = 0;
+    static int copied = 0;
+    struct LifetimeTracker {
+        int value;
+
+        LifetimeTracker(int val = 0) : value(val) {
+            constructed++;
+            std::cout << "LifetimeTracker constructed: " << value << " (total: " << constructed << ")" << std::endl;
+        }
+
+        LifetimeTracker(const LifetimeTracker& other) : value(other.value) {
+            copied++;
+            std::cout << "LifetimeTracker copied: " << value << " (total copies: " << copied << ")" << std::endl;
+        }
+
+        LifetimeTracker(LifetimeTracker&& other) noexcept : value(other.value) {
+            moved++;
+            other.value = -1; // Mark as moved
+            std::cout << "LifetimeTracker moved: " << value << " (total moves: " << moved << ")" << std::endl;
+        }
+
+        LifetimeTracker& operator=(const LifetimeTracker& other) {
+            if (this != &other) {
+                value = other.value;
+                copied++;
+                std::cout << "LifetimeTracker copy assigned: " << value << " (total copies: " << copied << ")" << std::endl;
+            }
+            return *this;
+        }
+
+        LifetimeTracker& operator=(LifetimeTracker&& other) noexcept {
+            if (this != &other) {
+                value = other.value;
+                other.value = -1; // Mark as moved
+                moved++;
+                std::cout << "LifetimeTracker move assigned: " << value << " (total moves: " << moved << ")" << std::endl;
+            }
+            return *this;
+        }
+
+        ~LifetimeTracker() {
+            destroyed++;
+            std::cout << "LifetimeTracker destroyed: " << value << " (total: " << destroyed << ")" << std::endl;
+        }
+
+        static void resetCounters() {
+            constructed = 0;
+            destroyed = 0;
+            moved = 0;
+            copied = 0;
+        }
+
+        static void printStats() {
+            std::cout << "\n--- LifetimeTracker Stats ---" << std::endl;
+            std::cout << "Constructed: " << constructed << std::endl;
+            std::cout << "Destroyed: " << destroyed << std::endl;
+            std::cout << "Moved: " << moved << std::endl;
+            std::cout << "Copied: " << copied << std::endl;
+            std::cout << "Balance (constructed - destroyed): " << (constructed - destroyed) << std::endl;
+            std::cout << "-------------------------\n" << std::endl;
+        }
+    };
+
+    io::fsm<void>& fsm = co_await io::get_fsm;
+    std::cout << "\n=== Starting chan construction/destruction tests ===\n" << std::endl;
+
+    // Test 1: Basic construction and destruction
+    std::cout << "Test 1: Basic construction and destruction" << std::endl;
+    {
+        LifetimeTracker::resetCounters();
+        std::cout << "Creating chan with 5 capacity..." << std::endl;
+        io::chan<LifetimeTracker> chan(fsm, 5);
+
+        std::cout << "Creating and sending 3 elements..." << std::endl;
+        std::array<LifetimeTracker, 3> items = { LifetimeTracker(1), LifetimeTracker(2), LifetimeTracker(3) };
+        co_await(chan << std::span<LifetimeTracker>(items));
+
+        std::cout << "Chan before destruction:" << std::endl;
+        std::cout << "  Size: " << chan.size() << std::endl;
+        std::cout << "  Capacity: " << chan.capacity() << std::endl;
+        std::cout << "Channel will be destroyed now..." << std::endl;
+    }
+    std::cout << "After chan destruction:" << std::endl;
+    LifetimeTracker::printStats();
+
+    // Test 2: Testing copy and move construction of chan
+    std::cout << "Test 2: Copy and move construction of chan" << std::endl;
+    {
+        LifetimeTracker::resetCounters();
+
+        std::cout << "Creating original chan..." << std::endl;
+        io::chan<LifetimeTracker> original_chan(fsm, 5);
+
+        // Add some elements to the channel
+        std::array<LifetimeTracker, 2> items = { LifetimeTracker(10), LifetimeTracker(20) };
+        co_await(original_chan << std::span<LifetimeTracker>(items));
+
+        std::cout << "Creating copy constructed chan..." << std::endl;
+        io::chan<LifetimeTracker> copy_chan(original_chan);
+
+        std::cout << "Creating move constructed chan..." << std::endl;
+        io::chan<LifetimeTracker> move_chan(std::move(copy_chan));
+
+        std::cout << "Stats after construction:" << std::endl;
+        std::cout << "  Original size: " << original_chan.size() << std::endl;
+        std::cout << "  Moved size: " << move_chan.size() << std::endl;
+
+        // Receive from move_chan to verify data was preserved
+        std::array<LifetimeTracker, 2> received;
+        co_await move_chan.get_and_copy(std::span<LifetimeTracker>(received));
+
+        std::cout << "Received values from moved chan: ";
+        for (const auto& item : received) {
+            std::cout << item.value << " ";
+        }
+        std::cout << std::endl;
+    }
+    LifetimeTracker::printStats();
+
+    // Test 3: Testing chan_r and chan_s conversion
+    std::cout << "Test 3: Testing chan_r and chan_s conversion" << std::endl;
+    {
+        LifetimeTracker::resetCounters();
+
+        std::cout << "Creating original chan..." << std::endl;
+        io::chan<LifetimeTracker> original_chan(fsm, 5);
+
+        // Test conversion to chan_r
+        std::cout << "Converting to chan_r..." << std::endl;
+        io::chan_r<LifetimeTracker> read_chan = original_chan;
+
+        // Test conversion to chan_s
+        std::cout << "Converting to chan_s..." << std::endl;
+        io::chan_s<LifetimeTracker> write_chan = original_chan;
+
+        // Add some elements through write_chan
+        std::array<LifetimeTracker, 2> items = { LifetimeTracker(30), LifetimeTracker(40) };
+        co_await(write_chan << std::span<LifetimeTracker>(items));
+
+        // Read them through read_chan
+        std::array<LifetimeTracker, 2> received;
+        co_await read_chan.get_and_copy(std::span<LifetimeTracker>(received));
+
+        std::cout << "Received values from chan_r: ";
+        for (const auto& item : received) {
+            std::cout << item.value << " ";
+        }
+        std::cout << std::endl;
+    }
+    LifetimeTracker::printStats();
+
+    // Test 4: Testing ring buffer behavior
+    std::cout << "Test 4: Testing ring buffer behavior" << std::endl;
+    {
+        LifetimeTracker::resetCounters();
+
+        std::cout << "Creating chan with capacity 4..." << std::endl;
+        io::chan<LifetimeTracker> chan(fsm, 4);
+
+        // First, fill the buffer
+        std::cout << "Filling buffer with 4 elements..." << std::endl;
+        std::array<LifetimeTracker, 4> items1 = {
+            LifetimeTracker(100), LifetimeTracker(101),
+            LifetimeTracker(102), LifetimeTracker(103)
+        };
+        co_await(chan << std::span<LifetimeTracker>(items1));
+
+        // Read 2 elements
+        std::cout << "Reading 2 elements..." << std::endl;
+        std::array<LifetimeTracker, 2> received1;
+        co_await chan.get_and_copy(std::span<LifetimeTracker>(received1));
+
+        // Add 2 more elements (should wrap around)
+        std::cout << "Adding 2 more elements (should wrap around)..." << std::endl;
+        std::array<LifetimeTracker, 2> items2 = { LifetimeTracker(104), LifetimeTracker(105) };
+        co_await(chan << std::span<LifetimeTracker>(items2));
+
+        // Read all remaining elements
+        std::cout << "Reading all remaining elements..." << std::endl;
+        std::array<LifetimeTracker, 4> received2;
+        co_await chan.get_and_copy(std::span<LifetimeTracker>(received2));
+
+        std::cout << "Read values from first batch: ";
+        for (const auto& item : received1) {
+            std::cout << item.value << " ";
+        }
+        std::cout << std::endl;
+
+        std::cout << "Read values from second batch: ";
+        for (const auto& item : received2) {
+            std::cout << item.value << " ";
+        }
+        std::cout << std::endl;
+    }
+    LifetimeTracker::printStats();
+
+    // Test 5: Testing close() behavior
+    std::cout << "Test 5: Testing close() behavior" << std::endl;
+    {
+        LifetimeTracker::resetCounters();
+
+        std::cout << "Creating chan..." << std::endl;
+        io::chan<LifetimeTracker> chan(fsm, 3);
+
+        // Add some elements
+        std::cout << "Adding elements..." << std::endl;
+        std::array<LifetimeTracker, 2> items = { LifetimeTracker(200), LifetimeTracker(201) };
+        co_await(chan << std::span<LifetimeTracker>(items));
+
+        std::cout << "Closing channel..." << std::endl;
+        chan.close();
+
+        std::cout << "Channel closed, checking counters..." << std::endl;
+    }
+    LifetimeTracker::printStats();
+
+    std::cout << "\n=== chan construction/destruction tests completed ===\n" << std::endl;
+    co_return;
+}
+
+io::fsm_func<void> coro_chan_peak_shaving() {
+    // Peak shaving and valley filling demo using channel and pipeline with chan's native protocol adapters
+    io::fsm<void>& fsm = co_await io::get_fsm;
+
+    std::cout << "\n=== Channel Peak Shaving Demo ===\n" << std::endl;
+
+    // Create a channel with capacity 10 to buffer data between producer and consumer
+    io::chan<int> buffer_chan(fsm, 100);
+
+    // Producer FSM that generates data at varying rates (peak load)
+    auto producer = [](io::chan<int> channel) -> io::fsm_func<void> {
+        io::fsm<void>& fsm = co_await io::get_fsm;
+
+        std::cout << "Producer started" << std::endl;
+
+        for (int i = 0; i < 200; i++) {
+            co_await fsm.setTimeout(std::chrono::milliseconds(100));
+
+            // Send data to channel
+            std::array<int, 1> data = { i };
+            co_await(channel << std::span<int>(data));
+            if (i % 50 == 0)
+            {
+                // Peak Data !
+                std::array<int, 30> data;
+                std::fill(data.begin(), data.end(), 1);
+                co_await(channel << std::span<int>(data));
+            }
+
+            std::cout << "Produced: " << i << std::endl;
+        }
+
+        // Close the channel when done
+        channel.close();
+        std::cout << "Producer finished, channel closed" << std::endl;
+        co_return;
+        };
+
+    // Consumer FSM that consumes data at a steady rate (valley filling)
+    auto consumer = [](io::chan<int> channel) -> io::fsm_func<void> {
+        io::fsm<void>& fsm = co_await io::get_fsm;
+
+        std::cout << "Consumer started" << std::endl;
+
+        // Create a buffer for receiving data
+        std::array<int, 1> buffer;
+        io::timer::up timer;
+
+        // Consume at a steady rate
+        while (!channel.isClosed()) {
+            timer.start();
+            // Always wait the same amount of time between operations (steady consumption)
+            co_await fsm.setTimeout(std::chrono::milliseconds(20));
+
+            // Receive data from channel
+            co_await channel.get_and_copy(std::span<int>(buffer));
+            auto duration = timer.lap();
+
+            std::cout << "Consumed: " << buffer[0]
+                << " (channel operation took: "
+                << std::chrono::duration_cast<std::chrono::milliseconds>(duration).count()
+                << "ms, buffer size: " << channel.size() << "/" << channel.capacity()
+                << ")" << std::endl;
+        }
+
+        std::cout << "Consumer finished" << std::endl;
+        co_return;
+        };
+
+    // Start the producer and consumer for the original channel
+    fsm.spawn_now(producer(buffer_chan)).detach();
+    fsm.spawn_now(consumer(buffer_chan)).detach();
+    co_return;
 }
 
 io::fsm_func<void> coro_benchmark()
@@ -213,26 +486,24 @@ io::fsm_func<void> coro_tcp_echo_server()
             fsm.spawn_now(
                 [](io::sock::tcp socket) -> io::fsm_func<void>
                 {
-                    bool loop = true;
                     io::fsm<void>& fsm = co_await io::get_fsm;
+                    io::future end;
                     
                     // Create a simple pipeline: socket >> socket
                     // This pipeline reads data from the socket and writes it back to the socket
                     auto pipeline = io::pipeline<>() >> socket >> socket;
                     
                     // Start the pipeline and set up error handling callback
-                    auto started_pipeline = std::move(pipeline).start(
-                        [&loop](int which, bool output_or_input) {
+                    auto started_pipeline = std::move(pipeline).spawn(fsm, 
+                        [prom = fsm.make_future(end)](int which, bool output_or_input, std::error_code ec) mutable{
                             std::cerr << "Pipeline error in segment " << which 
-                                      << (output_or_input ? " (output)" : " (input)") << std::endl;
-                            loop = false;
+                                      << (output_or_input ? " (output)" : " (input)")
+                                      << " - Error: " << ec.message()
+                                      << " [code: " << ec.value() << "]" << std::endl;
+                            prom.resolve_later();
                         }
                     );
-                    
-                    // Drive the pipeline in a loop
-                    while (loop) {
-                        started_pipeline <= co_await +started_pipeline;
-                    }
+                    co_await end;
                 }(std::move(socket)))
                 .detach();
         }
@@ -287,9 +558,11 @@ io::fsm_func<void> coro_tcp_echo_client()
         
         // Start the pipeline and set up error handling callback
         auto started_pipeline = std::move(pipeline).start(
-            [&loop](int which, bool output_or_input) {
+            [&loop](int which, bool output_or_input, std::error_code ec) {
                 std::cerr << "Pipeline error in segment " << which 
-                          << (output_or_input ? " (output)" : " (input)") << std::endl;
+                          << (output_or_input ? " (output)" : " (input)")
+                          << " - Error: " << ec.message()
+                          << " [code: " << ec.value() << "]" << std::endl;
                 loop = false;
             }
         );
@@ -323,9 +596,11 @@ io::fsm_func<void> coro_udp_echo()
     
     // Start the pipeline and set up error handling callback
     auto started_pipeline = std::move(pipeline).start(
-        [](int which, bool output_or_input) {
+        [](int which, bool output_or_input, std::error_code ec) {
             std::cerr << "Pipeline error in segment " << which 
-                      << (output_or_input ? " (output)" : " (input)") << std::endl;
+                      << (output_or_input ? " (output)" : " (input)")
+                      << " - Error: " << ec.message()
+                      << " [code: " << ec.value() << "]" << std::endl;
         }
     );
     
@@ -367,9 +642,11 @@ io::fsm_func<void> coro_udp_echo_with_adapter()
     
     // Start the pipeline and set up error handling callback
     auto started_pipeline = std::move(pipeline).start(
-        [](int which, bool output_or_input) {
+        [](int which, bool output_or_input, std::error_code ec) {
             std::cerr << "Pipeline error in segment " << which 
-                      << (output_or_input ? " (output)" : " (input)") << std::endl;
+                      << (output_or_input ? " (output)" : " (input)")
+                      << " - Error: " << ec.message()
+                      << " [code: " << ec.value() << "]" << std::endl;
         }
     );
     
@@ -678,10 +955,6 @@ void io_testmain_v3()
     if (false)
         mngr.spawn_later(coro_limit_test(10000000)).detach();
 
-    // test of multi-thread
-    if (false)
-        mngr.spawn_later(coro_multi_thread()).detach();
-
     // test of chan
     if (false)
     {
@@ -691,6 +964,14 @@ void io_testmain_v3()
             mngr.spawn_later(coro_chan(nullptr)).detach();
     }
 
+    // construction correctness test for chan
+    if (false)
+        mngr.spawn_later(coro_chan_construct_correct_test()).detach();
+    
+    // peak shaving demo with chan
+    if (false)
+        mngr.spawn_later(coro_chan_peak_shaving()).detach();
+        
     // coroutine benchmark
     if (true)
         mngr.spawn_later(coro_benchmark()).detach();

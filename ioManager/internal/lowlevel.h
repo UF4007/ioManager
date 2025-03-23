@@ -116,20 +116,12 @@ class lowlevel {
         promise<void> make_future(future &fut);
         // make a clock
         template <typename T_Duration>
-        void make_clock(clock &fut, T_Duration duration, bool isResolve = false);
+        void make_clock(io::clock&fut, T_Duration duration, bool isResolve = false);
         template <typename T_Duration>
-        clock setTimeout(T_Duration duration, bool isResolve = false) {
-            clock fut;
-            make_clock(fut, duration, isResolve);
-            return fut;
-        }
-        inline void make_outdated_clock(clock& fut, bool isResolve = false);
+        io::clock setTimeout(T_Duration duration, bool isResolve = false);
+        inline void make_outdated_clock(io::clock& fut, bool isResolve = false);
         // make async future pair
         async_promise make_future(async_future &fut);
-        template <typename T_chan>
-        chan<T_chan> make_chan(size_t size, std::initializer_list<T_chan> init_list = {});
-        //template <typename T_chan>
-        //async_chan<T_chan> make_async_chan();
         // sync co_spawn, run coroutine immediately.
         template <typename T_spawn>
         [[nodiscard]] fsm_handle<T_spawn> spawn_now(fsm_func<T_spawn> new_fsm);

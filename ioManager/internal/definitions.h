@@ -50,6 +50,13 @@ inline void io::lowlevel::fsm_base::make_clock(clock &fut, T_Duration duration, 
 {
     this->mngr->make_clock(fut, duration, isResolve);
 }
+template <typename T_Duration>
+inline io::clock io::lowlevel::fsm_base::setTimeout(T_Duration duration, bool isResolve)
+{
+    clock fut;
+    make_clock(fut, duration, isResolve);
+    return fut;
+}
 inline void io::lowlevel::fsm_base::make_outdated_clock(clock& fut, bool isResolve)
 {
     this->mngr->make_outdated_clock(fut, isResolve);
@@ -57,11 +64,6 @@ inline void io::lowlevel::fsm_base::make_outdated_clock(clock& fut, bool isResol
 inline io::async_promise io::lowlevel::fsm_base::make_future(async_future &fut)
 {
     return this->mngr->make_future(fut);
-}
-template <typename T_chan>
-inline io::chan<T_chan> io::lowlevel::fsm_base::make_chan(size_t size, std::initializer_list<T_chan> init_list)
-{
-    return this->mngr->make_chan(size, init_list);
 }
 
 

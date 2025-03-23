@@ -7,9 +7,6 @@
 																	template <typename T2>friend struct io::promise;\
 																	friend struct io::async_future;\
 																	friend struct io::async_promise;\
-																	template <typename T2>requires std::is_move_constructible_v<T2>friend struct io::chan;\
-																	template <typename T2>requires std::is_move_constructible_v<T2>friend struct io::chan_r;\
-																	template <typename T2>requires std::is_move_constructible_v<T2>friend struct io::chan_s;\
 																	template <typename T2>friend struct io::fsm;\
 																	template <typename T2>requires (std::is_same_v<T2, void> || std::is_default_constructible_v<T2>)friend struct io::fsm_func;\
 																	template <typename T2>friend struct io::fsm_handle;\
@@ -36,15 +33,6 @@ struct clock;
 template <typename T>struct promise;
 struct async_future;
 struct async_promise;
-template <typename T>
-	requires std::is_move_constructible_v<T>
-struct chan;
-template <typename T>
-	requires std::is_move_constructible_v<T>
-struct chan_r;
-template <typename T>
-	requires std::is_move_constructible_v<T>
-struct chan_s;
 template <typename T>struct fsm;
 template <typename T>
 	requires (std::is_same_v<T, void> || std::is_default_constructible_v<T>)

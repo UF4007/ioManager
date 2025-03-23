@@ -1,5 +1,4 @@
 #pragma once
-
 namespace io {
     inline namespace IO_LIB_VERSION___ {
         namespace prot {
