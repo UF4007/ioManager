@@ -43,7 +43,7 @@
   - [创建基本的FSM协程](#创建基本的fsm协程)
   - [生成和管理协程](#生成和管理协程)
   - [使用延迟](#使用延迟)
-  - [带关联值的FSM](#带关联值的fsm)
+  - [带内建值的FSM](#带内建值的fsm)
   - [管理协程生命周期](#管理协程生命周期)
 - [Future/Promise：协程通信](#futurepromise协程通信)
   - [创建和使用Future/Promise对](#创建和使用futurepromise对)
