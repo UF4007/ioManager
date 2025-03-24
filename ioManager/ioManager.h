@@ -91,7 +91,7 @@ namespace io
             }
         private:
             std::stack<T*> freed;
-            const size_t size_limit;
+            size_t size_limit;
             static constexpr double erase_multiple = 0.5;  // in (0,1) zone
             static constexpr bool debug = false;
         };
@@ -643,7 +643,7 @@ namespace io
             // the pointer got from function resolve() will be invalid next co_await.
             //  gets nullptr when the promise is invalid.
             inline void resolve() {
-                static_cast<lowlevel::promise_base*>(this)->resolve();
+                this->lowlevel::promise_base::resolve();
             }
             inline T* resolve_later() {
                 if (static_cast<lowlevel::promise_base*>(this)->resolve_later())
@@ -656,6 +656,34 @@ namespace io
                     return ptr;
                 else
                     return nullptr;
+            }
+            inline bool resolve(auto&& _data)
+            {
+                T* pdata = data();
+                if (pdata)
+                {
+                    *pdata = std::forward<T>(_data);
+                    this->lowlevel::promise_base::resolve();
+                    return true;
+                }
+                else
+                {
+                    return false;
+                }
+            }
+            inline bool resolve_later(auto&& _data)
+            {
+                T* pdata = data();
+                if (pdata)
+                {
+                    *pdata = std::forward<T>(_data);
+                    this->lowlevel::promise_base::resolve_later();
+                    return true;
+                }
+                else
+                {
+                    return false;
+                }
             }
         private:
             inline promise(lowlevel::awaiter* a, T* p) noexcept :lowlevel::promise_base(a), ptr(p) {}
@@ -884,7 +912,7 @@ namespace io
                 }
                 template <typename ...Args>
                 inline lowlevel::awaitable_base<T, lowlevel::selector_status::race, Args...> await_transform(lowlevel::race<Args...>&& x) {
-                    return lowlevel::awaitable_base<T, lowlevel::selector_status::race, Args...>(*this, x.il);
+                    return lowlevel::awaitable_base<T, lowlevel::selector_status::race, Args...>(*this, std::move(x.il));
                 }
                 template <typename ...Args>
                 inline lowlevel::awaitable_base<T, lowlevel::selector_status::allsettle, Args...> await_transform(lowlevel::allSettle<Args...>&& x) {
@@ -1634,9 +1662,9 @@ namespace io
         template <typename Front = void, typename Rear = void, typename Adaptor = void>
         struct pipeline {
             __IO_INTERNAL_HEADER_PERMISSION;
-            using Rear_t = typename Rear;
-            using Front_t = typename Front;
-            using Adaptor_t = typename Adaptor;
+            using Rear_t = Rear;
+            using Front_t = Front;
+            using Adaptor_t = Adaptor;
 
             inline decltype(auto) start() && {
                 return pipeline_started<std::remove_reference_t<decltype(*this)>, false, std::monostate>(std::move(*this));
@@ -1961,9 +1989,9 @@ namespace io
         template <typename Front, typename Rear, typename Adaptor>
         struct pipeline_constructor {
             __IO_INTERNAL_HEADER_PERMISSION;
-            using Rear_t = typename Rear;
-            using Front_t = typename Front;
-            using Adaptor_t = typename Adaptor;
+            using Rear_t =  Rear;
+            using Front_t =  Front;
+            using Adaptor_t =  Adaptor;
             // Continue construction with adaptor
             template<typename T>
                 requires (
@@ -2136,12 +2164,12 @@ namespace io
             
             // Call operator to invoke the appropriate handler
             inline response_type operator()(const std::pair<key_type, request_type>& request) {
-                const auto& [key, req] = request;
-                auto it = handlers_.find(key);
+                const auto& [key_, req_] = request;
+                auto it = handlers_.find(key_);
                 if (it != handlers_.end()) {
-                    return it->second(req);
+                    return it->second(req_);
                 } else if (default_handler_) {
-                    return default_handler_(req);
+                    return default_handler_(req_);
                 } else {
                     assert(!"rpc ERROR: No handler found for key and no default handler provided");
                 }

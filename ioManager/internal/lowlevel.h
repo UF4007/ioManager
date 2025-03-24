@@ -140,14 +140,6 @@ class lowlevel {
         bool is_deconstructing = false; // is in delay deconstruction list?
     };
 
-    struct bool_awaitable
-    {
-        inline bool_awaitable(bool isSuspend) :isSuspend(isSuspend) {}
-        inline bool await_ready() noexcept { return !isSuspend; }
-        inline void await_suspend(std::coroutine_handle<> h) {}
-        inline void await_resume() noexcept {}
-        bool isSuspend;
-    };
     struct awa_awaitable
     {
         inline awa_awaitable(std::coroutine_handle<>* p, bool* ps) :ptr(p), simple_awaiter(ps) {}
@@ -246,7 +238,7 @@ class lowlevel {
             }
             return false;
         }
-        awaitable_base(fsm_func<T_FSM>::promise_type& _fsm, std::array<awaiter*, sizeof...(Args)> il);
+        awaitable_base(fsm_func<T_FSM>::promise_type& _fsm, std::array<awaiter*, sizeof...(Args)>&& il);
         inline bool await_ready() noexcept { return when_all_count == 0; }
         inline void await_suspend(std::coroutine_handle<> h) {}
         inline int await_resume() noexcept requires (sizeof...(Args) == 1 && !(std::is_convertible_v<Args&, io::clock&> && ...)) {

@@ -22,7 +22,25 @@
 #include <optional>
 #include <list>
 #include <atomic>
+//_MSC_FULL_VER
+/**
+ * Disable optimization for coroutine header in MSVC to prevent crashes.
+ * Issue: MSVC generates misaligned SSE instructions when optimizing coroutine code,
+ * which leads to application crashes. No such issues observed with GCC or Clang.
+ * Example of the problem can be found in the coro_chan_peak_shaving function in demo.h.
+ * No minimal reproduction case available yet.
+ * Testing confirms this does not cause performance degradation in coroutines or elsewhere.
+ * 
+ * MSVC Version: 19.43.34809
+ * Microsoft Visual Studio Community 2022 (64 bit)
+ */
+#ifdef _MSC_VER
+#pragma optimize("", off)
+#endif
 #include <coroutine>
+#ifdef _MSC_VER
+#pragma optimize("", on)
+#endif
 #include <span>
 #include <semaphore>
 #include <algorithm>

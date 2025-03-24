@@ -12,6 +12,7 @@ namespace io {
 
             // Input protocol implemention. 
             // The memory's lifetime that is pointed by the std::span must be longer than the future returned.
+            // Use the move operator=, not the copy.
             inline future operator<<(const std::span<T>& in) {
                 std::span<T> data_in = in;
                 chan_base* base = this->getPtr();
@@ -208,34 +209,6 @@ namespace io {
                 static const std::error_category& global() {
                     thread_local err_category instance;
                     return instance;
-                }
-            };
-
-            /**
-             * @brief Output protocol implementation for the channel.
-             *
-             * Provides an actual storage buffer for data output from the channel.
-             *    While std::span is just a view without owning memory, out_prot defines
-             *    a fixed-size array (std::array) to store data, solving the buffer ownership
-             *    problem in pipeline design.
-             *
-             * Controls batch size for data reading through the Out_buf_size template parameter,
-             *    determining how many items will be read from the channel at once.
-             *
-             * @tparam Out_buf_size Size of the output buffer, controls batch size per read operation.
-             *                      Must be greater than 0.
-             */
-            template <size_t Out_buf_size = 1>
-                requires (Out_buf_size != 0)
-            struct out_prot : chan<T> {
-                out_prot(const chan<T>& c) : chan<T>(c) {}
-                out_prot(chan<T>&& c) : chan<T>(std::move(c)) {}
-
-                using prot_output_type = std::array<T, Out_buf_size>;
-
-                // Output protocol implementation
-                inline void operator>>(future_with<prot_output_type>& out_future) {
-                    out_future = this->get_and_copy(std::span(out_future.data.data(), Out_buf_size));
                 }
             };
 
@@ -539,6 +512,67 @@ namespace io {
             chan_s(chan<T>&& c) : chan<T>(std::move(c)) {}
             
             future get_and_copy(const std::span<T>& out) = delete;
+        };
+
+        namespace prot {
+            /**
+             * @brief Output protocol implementation for the channel.
+             *
+             * Provides an actual storage buffer for data output from the channel.
+             *    While std::span is just a view without owning memory, chan_prot defines
+             *    a fixed-size array (std::array) to store data, solving the buffer ownership
+             *    problem in pipeline design.
+             *
+             * Controls batch size for data reading through the Out_buf_size template parameter,
+             *    determining how many items will be read from the channel at once.
+             *
+             * @tparam Out_buf_size Size of the output buffer, controls batch size per read operation.
+             *                      Must be greater than 0.
+             */
+            template <typename T, size_t Out_buf_size = 1>
+                requires (Out_buf_size != 0)
+            struct chan : io::chan<T> {
+                template <typename ...Args>
+                chan(Args&&... c) : io::chan<T>(std::forward<Args>(c)...) {}
+
+                using prot_output_type =
+                    std::conditional_t<
+                    Out_buf_size == 1,
+                    T,
+                    std::array<T, Out_buf_size>
+                    >;
+
+                // Output protocol implementation
+                inline void operator>>(future_with<prot_output_type>& out_future) {
+                    if constexpr (Out_buf_size == 1)
+                    {
+                        out_future.future::operator=(this->get_and_copy(std::span(&out_future.data, 1)));
+                    }
+                    else
+                    {
+                        out_future.future::operator=(this->get_and_copy(std::span(out_future.data.data(), Out_buf_size)));
+                    }
+                }
+
+                using prot_input_type =
+                    std::conditional_t<
+                    Out_buf_size == 1,
+                    T,
+                    std::span<T>
+                    >;
+
+                [[no_unique_address]] std::conditional_t<
+                    Out_buf_size == 1,
+                    T,
+                    std::monostate
+                > temp;
+
+                // Input protocol implementation
+                inline future operator<<(const T& in) requires (Out_buf_size == 1) {
+                    temp = std::move(in);
+                    return this->io::chan<T>::operator<<(std::span(&temp, 1));
+                }
+            };
         };
     };
 };

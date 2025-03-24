@@ -156,8 +156,8 @@ inline void io::lowlevel::allSettle<Args...>::deploy(future&& arg) {
 //awaitable_base
 template <typename T_FSM, io::lowlevel::selector_status status, typename ...Args>
     requires (std::is_convertible_v<Args&, io::future&> && ...)
-inline io::lowlevel::awaitable_base<T_FSM, status, Args...>::awaitable_base(io::fsm_promise<T_FSM>& _fsm, std::array<awaiter*, sizeof...(Args)> il)
-    : f_p(_fsm), await_arr(il) {
+inline io::lowlevel::awaitable_base<T_FSM, status, Args...>::awaitable_base(io::fsm_promise<T_FSM>& _fsm, std::array<awaiter*, sizeof...(Args)>&& il)
+    : f_p(_fsm), await_arr(std::move(il)) {
 
     when_all_count = sizeof...(Args);
 

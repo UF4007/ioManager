@@ -31,13 +31,14 @@ io::fsm_func<void> coro_limit_test(int num)
                 fsm.make_clock(cl1, std::chrono::seconds(1));
                 fsm.make_clock(cl2, std::chrono::seconds(2));
                 io::promise prom = fsm.make_future(fut);
-                io_select(
-                    cl1, {
-                    }, 
-                    cl2, {
-                    },
-                    fut, {
-                    });
+                do {
+                    switch (co_await io::future::race(cl1, cl2, fut)) {
+                    case 0: {
+                    } break; case 1: {
+                    } break; case 2: {
+                    } break;
+                    }
+                } while (0);;
             } }())
             .detach();
     }
@@ -317,78 +318,136 @@ io::fsm_func<void> coro_chan_construct_correct_test()
     co_return;
 }
 
-io::fsm_func<void> coro_chan_peak_shaving() {
-    // Peak shaving and valley filling demo using channel and pipeline with chan's native protocol adapters
-    io::fsm<void>& fsm = co_await io::get_fsm;
+io::fsm_func<void> coro_chan_peak_shaving()
+{
+    io::fsm<void> &fsm = co_await io::get_fsm;
 
-    std::cout << "\n=== Channel Peak Shaving Demo ===\n" << std::endl;
+    struct ProducerProtocol {
+        using prot_output_type = int;
+        
+        io::manager* mngr;
+        int counter = 0;
+        
+        ProducerProtocol(io::fsm<void>& fsm) : mngr(fsm.getManager()) {
+            fsm_handle = fsm.spawn_now(produce(this));
+        }
+        
+        void operator>>(io::future_with<int>& fut) {
+            promise = mngr->make_future(fut, &fut.data);
+            fsm_handle->resolve_later();
+        }
+        
+        io::fsm_func<io::promise<>> produce(ProducerProtocol* pthis) {
+            io::fsm<io::promise<>> &fsm = co_await io::get_fsm;
 
-    // Create a channel with capacity 10 to buffer data between producer and consumer
-    io::chan<int> buffer_chan(fsm, 100);
+            io::future fut;
+            
+            while (true) {
+                *fsm = fsm.make_future(fut);
+                co_await fut;
 
-    // Producer FSM that generates data at varying rates (peak load)
-    auto producer = [](io::chan<int> channel) -> io::fsm_func<void> {
-        io::fsm<void>& fsm = co_await io::get_fsm;
+                // idle producer speed
+                co_await fsm.setTimeout(std::chrono::milliseconds(200));
+                pthis->promise.resolve_later(pthis->counter);
 
-        std::cout << "Producer started" << std::endl;
+                if (pthis->counter % 30 == 0)
+                {
+                    for (int i = 0; i < 20; i++)
+                    {
+                        *fsm = fsm.make_future(fut);
+                        co_await fut;
 
-        for (int i = 0; i < 200; i++) {
-            co_await fsm.setTimeout(std::chrono::milliseconds(100));
+                        // producer boost speed
+                        co_await fsm.setTimeout(std::chrono::milliseconds(5));
+                        pthis->promise.resolve_later(1);
+                    }
+                }
 
-            // Send data to channel
-            std::array<int, 1> data = { i };
-            co_await(channel << std::span<int>(data));
-            if (i % 50 == 0)
-            {
-                // Peak Data !
-                std::array<int, 30> data;
-                std::fill(data.begin(), data.end(), 1);
-                co_await(channel << std::span<int>(data));
+                pthis->counter++;
+                
+                std::cout << "Produced: " << pthis->counter << std::endl;
             }
-
-            std::cout << "Produced: " << i << std::endl;
+            
+            co_return;
         }
+        
+        io::promise<int> promise;
+        io::fsm_handle<io::promise<>> fsm_handle;
+    };
 
-        // Close the channel when done
-        channel.close();
-        std::cout << "Producer finished, channel closed" << std::endl;
-        co_return;
-        };
-
-    // Consumer FSM that consumes data at a steady rate (valley filling)
-    auto consumer = [](io::chan<int> channel) -> io::fsm_func<void> {
-        io::fsm<void>& fsm = co_await io::get_fsm;
-
-        std::cout << "Consumer started" << std::endl;
-
-        // Create a buffer for receiving data
-        std::array<int, 1> buffer;
+    struct ConsumerProtocol {
+        using prot_input_type = int;
+        
+        io::manager* mngr;
         io::timer::up timer;
-
-        // Consume at a steady rate
-        while (!channel.isClosed()) {
+        int value;
+        
+        ConsumerProtocol(io::fsm<void>& fsm) : mngr(fsm.getManager()) {
             timer.start();
-            // Always wait the same amount of time between operations (steady consumption)
-            co_await fsm.setTimeout(std::chrono::milliseconds(20));
-
-            // Receive data from channel
-            co_await channel.get_and_copy(std::span<int>(buffer));
-            auto duration = timer.lap();
-
-            std::cout << "Consumed: " << buffer[0]
-                << " (channel operation took: "
-                << std::chrono::duration_cast<std::chrono::milliseconds>(duration).count()
-                << "ms, buffer size: " << channel.size() << "/" << channel.capacity()
-                << ")" << std::endl;
+            fsm_handle = fsm.spawn_now(consume(this));
         }
+        
+        // Input protocol implementation
+        io::future operator<<(const int& input) {
+            value = input;
+            
+            io::future fut;
+            prom = mngr->make_future(fut);
 
-        std::cout << "Consumer finished" << std::endl;
-        co_return;
-        };
+            fsm_handle->resolve_later();
+            return fut;
+        }
+        
+        io::fsm_func<io::promise<>> consume(ConsumerProtocol* pthis) {
+            io::fsm<io::promise<>> &fsm = co_await io::get_fsm;
 
-    // Start the producer and consumer for the original channel
-    fsm.spawn_now(producer(buffer_chan)).detach();
-    fsm.spawn_now(consumer(buffer_chan)).detach();
+            io::future fut;
+            
+            while (true) {
+                *fsm = fsm.make_future(fut);
+                co_await fut;
+
+                co_await fsm.setTimeout(std::chrono::milliseconds(50));
+
+                auto duration = pthis->timer.lap();
+                std::cout << "Consumed: " << pthis->value
+                    << " (took: "
+                    << std::chrono::duration_cast<std::chrono::milliseconds>(duration).count()
+                    << "ms)" << std::endl;
+
+                pthis->prom.resolve_later();
+            }
+            
+            std::cout << "Consumer finished" << std::endl;
+            co_return;
+        }
+        
+        io::promise<> prom;
+        io::fsm_handle<io::promise<>> fsm_handle;
+    };
+
+    ProducerProtocol producer(fsm);
+    ConsumerProtocol consumer(fsm);
+
+    io::chan<int> ch = io::chan<int>(fsm, 100);
+    
+    // With a chan
+    auto pipeline = io::pipeline<>() >> producer >> [ch](const int& a)mutable->std::optional<int> {
+        std::cout << "Channel capacity: (" << ch.size() << "/" << ch.capacity() << ")" << std::endl;
+        return a;
+        } >> io::prot::chan<int>(ch) >> consumer;
+
+    // Without chan, the producer will be block during the consumer being await.
+    //auto pipeline = io::pipeline<>() >> producer >> consumer;
+    
+    auto started_pipeline = std::move(pipeline).start();
+
+    while(1)
+    {
+        //drive the pipeline
+        started_pipeline <= co_await +started_pipeline;
+    }
+    
     co_return;
 }
 
