@@ -597,7 +597,7 @@ auto started_pipeline = std::move(pipeline).start([](int which, bool output_or_i
               << (output_or_input ? " (output)" : " (input)")
               << " - 错误: " << ec.message()
               << " [代码: " << ec.value() << "]" << std::endl;
-    return true;
+    return;
 });
 ```
 
@@ -618,7 +618,7 @@ auto pipeline_handle = std::move(pipeline).spawn(fsm, [](int which, bool output_
     std::cout << "管线段 " << which << " 发生错误"
               << (output_or_input ? " (output)" : " (input)")
               << " - 错误: " << ec.message() << std::endl;
-    return true;
+    return;
 });
 ```
 

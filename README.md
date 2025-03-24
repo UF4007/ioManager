@@ -626,7 +626,7 @@ auto started_pipeline = std::move(pipeline).start([](int which, bool output_or_i
               << (output_or_input ? " (output)" : " (input)")
               << " - Error: " << ec.message()
               << " [Code: " << ec.value() << "]" << std::endl;
-    return true;
+    return;
 });
 ```
 
@@ -647,7 +647,7 @@ auto pipeline_handle = std::move(pipeline).spawn(fsm, [](int which, bool output_
     std::cout << "Error in pipeline segment " << which 
               << (output_or_input ? " (output)" : " (input)")
               << " - Error: " << ec.message() << std::endl;
-    return true;
+    return;
 });
 ```
 
