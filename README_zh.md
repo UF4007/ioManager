@@ -490,12 +490,12 @@ io::fsm_func<void> use_future_coroutines()
 
 1. **带Future的输出协议**：
    - 定义了非void的`prot_output_type`，指定它产生的数据类型
-   - 实现了`operator>>(future_with<prot_output_type>&)`，用于带关联数据的异步数据输出
+   - 实现了`void operator>>(future_with<prot_output_type>&)`，用于带关联数据的异步数据输出
    - 通过等待future以接收数据
 
 2. **直接输出协议**：
    - 定义了非void的`prot_output_type`，指定它产生的数据类型
-   - 实现了`operator>>(prot_output_type&)`，用于不带future的直接数据输出
+   - 实现了`void operator>>(prot_output_type&)`，用于不带future的直接数据输出
    - 适用于任意时间、任意次数都可立即获取的协议
 
 #### 输入协议（2种类型）

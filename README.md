@@ -511,12 +511,12 @@ In io::manager, protocols are divided into two main categories with specific sub
 
 1. **Future-with Output Protocol**: 
    - Defines a non-void `prot_output_type` that specifies the type of data it produces
-   - Implements `operator>>(future_with<prot_output_type>&)` for asynchronous data output with associated data
+   - Implements `void operator>>(future_with<prot_output_type>&)` for asynchronous data output with associated data
    - Allows awaiting the future to receive data
 
 2. **Direct Output Protocol**: 
    - Defines a non-void `prot_output_type` that specifies the type of data it produces
-   - Implements `operator>>(prot_output_type&)` for direct data output without futures
+   - Implements `void operator>>(prot_output_type&)` for direct data output without futures
    - A protocol that can be obtained instantly at any time and any number of times
 
 #### Input Protocols (2 types)
