@@ -1,4 +1,5 @@
 #pragma once
+//deprecated
 namespace io {
     inline namespace IO_LIB_VERSION___ {
         namespace prot {
@@ -9,19 +10,19 @@ namespace io {
                 __IO_INTERNAL_HEADER_PERMISSION;
 
                 // Define protocol types
-                using prot_input_type = std::pair<key, req>;
+                //using prot_input_type = std::pair<key, req>;
                 using prot_output_type = rsp;
 
                 // Constructor that takes an FSM and a list of RPC handlers
                 template <typename T_FSM, typename... Args>
                 inline rpc(fsm<T_FSM>& state_machine, Args&&... args)
-                    : manager(state_machine.getManager()), rpc_impl(std::forward<Args>(args)...) {
+                    : executor(state_machine.getManager()), rpc_impl(std::forward<Args>(args)...) {
                 }
 
                 // Input protocol implementation
                 inline future operator<<(const prot_input_type& request) {
                     future fut;
-                    input_prom = manager->make_future(fut);
+                    input_prom = executor->make_future(fut);
                     auto data_ptr = output_prom.data();
                     if (data_ptr)
                     {
@@ -38,8 +39,7 @@ namespace io {
 
                 // Output protocol implementation
                 inline void operator>>(future_with<prot_output_type>& fut) {
-                    // Create a promise for the future
-                    output_prom = manager->make_future(fut, &fut.data);
+                    output_prom = executor->make_future(fut, &fut.data);
 
                     if (input_prom.valid())
                     {
@@ -55,7 +55,7 @@ namespace io {
                 }
 
             private:
-                io::manager* manager;
+                io::manager* executor;
                 io::rpc<key, req, rsp> rpc_impl;
                 std::optional<rsp> input_temp;
                 io::promise<> input_prom;

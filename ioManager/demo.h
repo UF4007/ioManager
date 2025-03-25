@@ -376,8 +376,6 @@ io::fsm_func<void> coro_chan_peak_shaving()
     };
 
     struct ConsumerProtocol {
-        using prot_input_type = int;
-        
         io::manager* mngr;
         io::timer::up timer;
         int value;
@@ -756,8 +754,6 @@ io::fsm_func<void> coro_pipeline_test() {
 
     // 3. Direct Input Protocol - accepts data directly without returning a future
     struct DirectInputProtocol {
-        using prot_input_type = std::string;
-
         void operator<<(const std::string& input) {
             // Process input directly
             std::cout << "DirectInputProtocol received: " << input << std::endl;
@@ -766,8 +762,6 @@ io::fsm_func<void> coro_pipeline_test() {
 
     // 4. Future Input Protocol - accepts data and returns a future
     struct FutureInputProtocol {
-        using prot_input_type = int;
-        
         io::manager* mngr;
         FutureInputProtocol(io::manager* mngr) :mngr(mngr) {}
         
@@ -787,7 +781,6 @@ io::fsm_func<void> coro_pipeline_test() {
 
     // 5. Bidirectional Protocol with Direct I/O - implements both direct input and output
     struct DirectBidirectionalProtocol {
-        using prot_input_type = std::string;
         using prot_output_type = std::string;
 
         std::vector<std::string> data = { "Processed", "Data", "From", "Bidirectional" };
@@ -808,7 +801,6 @@ io::fsm_func<void> coro_pipeline_test() {
 
     // 6. Bidirectional Protocol with Future I/O - implements both future input and output
     struct FutureBidirectionalProtocol {
-        using prot_input_type = int;
         using prot_output_type = int;
         
         int counter = 100;
@@ -840,7 +832,6 @@ io::fsm_func<void> coro_pipeline_test() {
 
     // 7. Mixed Bidirectional Protocol - direct output and future input
     struct MixedBidirectionalProtocol1 {
-        using prot_input_type = int;
         using prot_output_type = std::string;
         
         std::vector<std::string> data = { "Mixed", "Protocol", "Direct", "Output" };
@@ -873,7 +864,6 @@ io::fsm_func<void> coro_pipeline_test() {
 
     // 8. Mixed Bidirectional Protocol - future output and direct input
     struct MixedBidirectionalProtocol2 {
-        using prot_input_type = std::string;
         using prot_output_type = int;
         
         int counter = 200;

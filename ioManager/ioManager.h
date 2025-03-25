@@ -619,6 +619,11 @@ namespace io
             future_with& operator =(const future_with&) = delete;
             future_with(future_with&&) = delete;
             future_with& operator =(future_with&&) = delete;
+            inline future_with(future&& right) noexcept :future(std::move(right)) {}
+            inline future_with& operator=(future&& right) noexcept {
+                this->future::operator=(std::move(right));
+                return *this;
+            }
             promise<T> getPromise();
         };
 
@@ -1427,6 +1432,43 @@ namespace io
 
         //protocol traits
         namespace trait {
+            template <typename F, typename T, typename = void> struct is_adaptor : std::false_type {
+                using result_type = void;
+            };
+
+            template <typename F, typename T>
+            struct is_adaptor<F, T, std::void_t<decltype(std::declval<F>()(std::declval<const T&>()))>>
+            {
+            private:
+                using ReturnType = decltype(std::declval<F>()(std::declval<const T&>()));
+
+                template <typename R>
+                struct is_optional : std::false_type {};
+
+                template <typename U>
+                struct is_optional<std::optional<U>> : std::true_type {
+                    using value_type = U;
+                };
+
+            public:
+                static constexpr bool value = is_optional<ReturnType>::value;
+
+                using result_type = typename std::conditional_t<
+                    value,
+                    is_optional<ReturnType>,
+                    std::false_type
+                >::value_type;
+            };
+
+            template <typename Front_prot_output_type, typename Adapter>
+            struct output_trait {
+                using type = std::conditional_t<
+                    std::is_void_v<Adapter>,
+                    Front_prot_output_type,
+                    typename is_adaptor<Adapter, Front_prot_output_type>::result_type
+                >;
+            };
+
             namespace detail {
                 // Check if T has prot_output_type
                 template <typename T, typename = void>
@@ -1435,12 +1477,12 @@ namespace io
                 template <typename T>
                 struct has_prot_output_type<T, std::void_t<typename T::prot_output_type>> : std::true_type {};
                 
-                // Check if T has prot_input_type
-                template <typename T, typename = void>
-                struct has_prot_input_type : std::false_type {};
-                
-                template <typename T>
-                struct has_prot_input_type<T, std::void_t<typename T::prot_input_type>> : std::true_type {};
+                //// Check if T has prot_input_type
+                //template <typename T, typename = void>
+                //struct has_prot_input_type : std::false_type {};
+                //
+                //template <typename T>
+                //struct has_prot_input_type<T, std::void_t<typename T::prot_input_type>> : std::true_type {};
                 
                 // Check if T::prot_output_type is void
                 template <typename T, typename = void>
@@ -1483,24 +1525,24 @@ namespace io
                     : std::true_type {};
                     
                 // Check if T has U operator<<(const prot_input_type&) where U is convertible to io::future
-                template <typename T, typename = void>
+                template <typename T, typename Front_prot_output_type, typename Adapter, typename = void>
                 struct has_future_send_op : std::false_type {};
                 
-                template <typename T>
-                struct has_future_send_op<T,
+                template <typename T, typename Front_prot_output_type, typename Adapter>
+				struct has_future_send_op<T, Front_prot_output_type, Adapter,
                                 std::void_t<decltype(
                                     std::declval<io::future&>() = std::declval<T>().operator<<(
-                                        std::declval<const typename T::prot_input_type&>()))> >
+                                        std::declval<const typename output_trait<Front_prot_output_type, Adapter>::type&>()))> >
                     : std::true_type {};
                     
                 // Check if T has void operator<<(const prot_input_type&)
-                template <typename T, typename = void>
+                template <typename T, typename Front_prot_output_type, typename Adapter, typename = void>
                 struct has_void_send_op : std::false_type {};
                 
-                template <typename T>
-                struct has_void_send_op<T, 
+                template <typename T, typename Front_prot_output_type, typename Adapter>
+				struct has_void_send_op<T, Front_prot_output_type, Adapter,
                                 std::void_t<decltype(std::declval<T>().operator<<(
-                                    std::declval<const typename T::prot_input_type&>()))> >
+                                    std::declval<const typename output_trait<Front_prot_output_type, Adapter>::type&>()))> >
                     : std::true_type {};
 
                 template <typename T>
@@ -1524,47 +1566,15 @@ namespace io
                      detail::has_future_op_void_type<T>::value);
             };
             
-            template <typename T>
+            template <typename T, typename Front_prot_output_type, typename Adapter>
             struct is_input_prot {
                 // is typename T a send protocol
                 static constexpr bool value = 
-                    (detail::has_prot_input_type<T>::value && 
-                    (detail::has_future_send_op<T>::value || 
-                     detail::has_void_send_op<T>::value));
+                    (detail::has_future_send_op<T, Front_prot_output_type, Adapter>::value ||
+                     detail::has_void_send_op<T, Front_prot_output_type, Adapter>::value);
                 
                 // await is true for future-returning operator<< and false for void-returning operator<<
-                static constexpr bool await = detail::has_future_send_op<T>::value;
-            };
-
-            template <typename T>
-            inline constexpr bool is_dualput_v = is_output_prot<T>::value && is_input_prot<T>::value;
-
-            template <typename F, typename T, typename = void> struct is_adaptor : std::false_type {
-                using result_type = void;
-            };
-
-            template <typename F, typename T>
-            struct is_adaptor<F, T, std::void_t<decltype(std::declval<F>()(std::declval<const T&>()))>>
-            {
-            private:
-                using ReturnType = decltype(std::declval<F>()(std::declval<const T&>()));
-
-                template <typename R>
-                struct is_optional : std::false_type {};
-
-                template <typename U>
-                struct is_optional<std::optional<U>> : std::true_type {
-                    using value_type = U;
-                };
-
-            public:
-                static constexpr bool value = is_optional<ReturnType>::value;
-
-                using result_type = typename std::conditional_t<
-                    value,
-                    is_optional<ReturnType>,
-                    std::false_type
-                >::value_type;
+                static constexpr bool await = detail::has_future_send_op<T, Front_prot_output_type, Adapter>::value;
             };
 
             template <typename T, typename = void>
@@ -1598,16 +1608,16 @@ namespace io
                 using prot_output_type = typename std::remove_reference_t<Rear>::prot_output_type;
             };
 
-            template <typename T1, typename T2>
+            template <typename T1, typename T2, typename Adaptor>
             struct is_compatible_prot_pair {
                 static constexpr bool value = 
                     is_output_prot_gen<T1>::value &&
-                    is_input_prot<T2>::value && 
-                    (is_output_prot_gen<T1>::await || is_input_prot<T2>::await);
+                    is_input_prot<T2, typename is_output_prot_gen<T1>::prot_output_type, Adaptor>::value &&
+                    (is_output_prot_gen<T1>::await || is_input_prot<T2, typename is_output_prot_gen<T1>::prot_output_type, Adaptor>::await);
             };
 
-            template <typename T1, typename T2>
-            inline constexpr bool is_compatible_prot_pair_v = is_compatible_prot_pair<T1, T2>::value;
+            template <typename T1, typename T2, typename Adaptor>
+            inline constexpr bool is_compatible_prot_pair_v = is_compatible_prot_pair<T1, T2, Adaptor>::value;
 
             // Concept to check if a type is a valid error handler for pipeline
             template <typename T>
@@ -1707,9 +1717,8 @@ namespace io
             template<typename T>
                 requires (
                 trait::is_output_prot<std::remove_reference_t<Rear>>::value&&
-                trait::is_input_prot<std::remove_reference_t<T>>::value&&
-                trait::is_compatible_prot_pair_v<std::remove_reference_t<Rear>, std::remove_reference_t<T>>&&
-                std::is_convertible_v<typename std::remove_reference_t<Rear>::prot_output_type, typename  std::remove_reference_t<T>::prot_input_type>
+                trait::is_input_prot<std::remove_reference_t<T>, typename std::remove_reference_t<Rear>::prot_output_type, void>::value&&
+                trait::is_compatible_prot_pair_v<std::remove_reference_t<Rear>, std::remove_reference_t<T>, void>
                 )
                 inline auto operator>>(T&& rear)&& {
                 return pipeline<std::remove_reference_t<decltype(*this)>,
@@ -1770,7 +1779,7 @@ namespace io
             template <typename ErrorHandler>
             inline void process(int which, ErrorHandler errorHandler) {
                 if (which == this->pair_sum() - 1) {
-                    if constexpr (trait::is_output_prot_gen<std::remove_reference_t<Front>>::await && trait::is_input_prot<std::remove_reference_t<Rear>>::await) {
+                    if constexpr (trait::is_output_prot_gen<std::remove_reference_t<Front>>::await && trait::is_input_prot<std::remove_reference_t<Rear>, typename trait::is_output_prot_gen<std::remove_reference_t<Front>>::prot_output_type, Adaptor>::await) {
                         if (turn == 1) {
                             if (front_future.getErr()) {
                                 if constexpr (std::is_same_v<ErrorHandler, std::monostate> == false)
@@ -1841,7 +1850,7 @@ namespace io
                             assert(!"pipeline ERROR: unexcepted turn clock!");
                         }
                     }
-                    else if constexpr (trait::is_input_prot<std::remove_reference_t<Rear>>::await) {
+                    else if constexpr (trait::is_input_prot<std::remove_reference_t<Rear>, typename trait::is_output_prot_gen<std::remove_reference_t<Front>>::prot_output_type, Adaptor>::await) {
                         if (turn == 3) {
                             if (rear_future.getErr()) {
                                 if constexpr (std::is_same_v<ErrorHandler, std::monostate> == false)
@@ -1871,7 +1880,7 @@ namespace io
                 if constexpr (trait::is_pipeline_v<std::remove_reference_t<Front>>) {
                     front.await_get(futures, index);
                 }
-                if constexpr (trait::is_output_prot_gen<std::remove_reference_t<Front>>::await && trait::is_input_prot<std::remove_reference_t<Rear>>::await) {
+                if constexpr (trait::is_output_prot_gen<std::remove_reference_t<Front>>::await && trait::is_input_prot<std::remove_reference_t<Rear>, typename trait::is_output_prot_gen<std::remove_reference_t<Front>>::prot_output_type, Adaptor>::await) {
                     if (turn == 0) {
                         if constexpr (trait::is_pipeline_v<std::remove_reference_t<Front>>) {
                             front.rear >> front_future;
@@ -1907,7 +1916,7 @@ namespace io
                     else {
                         assert(!"pipeline ERROR: unexcepted turn clock!");
                     }
-                } else if constexpr (trait::is_input_prot<std::remove_reference_t<Rear>>::await) {
+                } else if constexpr (trait::is_input_prot<std::remove_reference_t<Rear>, typename trait::is_output_prot_gen<std::remove_reference_t<Front>>::prot_output_type, Adaptor>::await) {
                     if (turn == 0 || turn == 2) {
                         if constexpr (!std::is_void_v<Adaptor>) {
                             bool adapted = false;
@@ -1946,7 +1955,7 @@ namespace io
                     }
                 }
                 else {
-                    static_assert(trait::is_input_prot<std::remove_reference_t<Rear>>::await, "pipeline ERROR: Two Direct protocols (Direct Output Protocol and Direct Input Protocol) cannot be connected to each other in a pipeline segment!");
+                    static_assert(trait::is_input_prot<std::remove_reference_t<Rear>, typename trait::is_output_prot_gen<std::remove_reference_t<Front>>::prot_output_type, Adaptor>::await, "pipeline ERROR: Two Direct protocols (Direct Output Protocol and Direct Input Protocol) cannot be connected to each other in a pipeline segment!");
                 }
             }
 
@@ -1979,7 +1988,7 @@ namespace io
                 typename trait::is_output_prot_gen<std::remove_reference_t<Front>>::prot_output_type
             > front_future;
             [[no_unique_address]] std::conditional_t<
-                trait::is_input_prot<std::remove_reference_t<Rear>>::await,
+                trait::is_input_prot<std::remove_reference_t<Rear>, typename trait::is_output_prot_gen<std::remove_reference_t<Front>>::prot_output_type, Adaptor>::await,
                 future,
                 std::monostate
             > rear_future;
@@ -2013,9 +2022,8 @@ namespace io
                 requires (
                 std::is_void_v<Rear>&&
                 std::is_void_v<Adaptor>&&
-                trait::is_input_prot<typename std::remove_reference_t<T>>::value&&
-                trait::is_compatible_prot_pair_v<std::remove_reference_t<Front>, std::remove_reference_t<T>>&&
-                std::is_convertible_v<typename trait::is_output_prot_gen<std::remove_reference_t<Front>>::prot_output_type, typename std::remove_reference_t<T>::prot_input_type>
+                trait::is_input_prot<typename std::remove_reference_t<T>, typename trait::is_output_prot_gen<std::remove_reference_t<Front>>::prot_output_type, Adaptor>::value&&
+                trait::is_compatible_prot_pair_v<std::remove_reference_t<Front>, std::remove_reference_t<T>, Adaptor>
                 )
                 inline auto operator>>(T&& rear)&& {
                 return pipeline<Front,
@@ -2031,9 +2039,8 @@ namespace io
                 requires (
                 std::is_void_v<Rear> &&
                 !std::is_void_v<Adaptor>&&
-                trait::is_input_prot<std::remove_reference_t<T>>::value&&
-                trait::is_compatible_prot_pair_v<std::remove_reference_t<Front>, std::remove_reference_t<T>>&&
-                std::is_convertible_v<typename trait::is_adaptor<Adaptor, typename trait::is_output_prot_gen<std::remove_reference_t<Front>>::prot_output_type>::result_type, typename std::remove_reference_t<T>::prot_input_type>
+                trait::is_input_prot<std::remove_reference_t<T>, typename trait::is_output_prot_gen<std::remove_reference_t<Front>>::prot_output_type, Adaptor>::value&&
+                trait::is_compatible_prot_pair_v<std::remove_reference_t<Front>, std::remove_reference_t<T>, Adaptor>
                 )
                 inline auto operator>>(T&& rear)&& {
                 return pipeline<Front,
@@ -2237,10 +2244,6 @@ namespace io
 
 #if __has_include("protocol/async_chan.h")
 #include "protocol/async_chan.h"
-#endif
-
-#if __has_include("protocol/rpc.h")
-#include "protocol/rpc.h"
 #endif
 
 #if __has_include("protocol/kcp/kcp.h")

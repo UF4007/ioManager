@@ -69,7 +69,7 @@
 
 ### 创建管理器
 
-一个管理器 == 一个线程
+一个管理器 == 一个线程 == 协程执行器
 
 ```cpp
 io::manager mgr;
@@ -482,6 +482,8 @@ io::fsm_func<void> use_future_coroutines()
 
 ### 协议Concept
 
+各个异步类传递异步消息的方式千奇百怪。为规范它们，抽象出了“协议”的接口。
+
 协议分为两种：
 
 #### 输出协议（2种类型）
@@ -499,24 +501,22 @@ io::fsm_func<void> use_future_coroutines()
 #### 输入协议（2种类型）
 
 1. **返回Future的输入协议**：
-   - 定义了`prot_input_type`，指定它接受的数据类型
-   - 实现了返回`future`的`operator<<(const prot_input_type&)`
+   - 实现了返回`future`的`operator<<(const T&)`，其中T可以被前级协议输出的`prot_output_type`或适配器返回类型转换得出。
    - 返回的future在操作完成时resolve 
 
 2. **直接输入协议**：
-   - 定义了`prot_input_type`，指定它接受的数据类型
-   - 实现了返回`void`的`operator<<(const prot_input_type&)`
+   - 实现了返回`void`的`operator<<(const T&)`，其中T可以被前级协议输出的`prot_output_type`或适配器返回类型转换得出。
    - 操作能够立刻完成
 
 #### 协议接口
+
+一个协议类只能有一个定义在`prot_output_type`的输出类型，但是可以有无数个输入类型。
 
 一个典型的双向协议实现：
 
 ```cpp
 struct my_protocol {
-    // 定义输入和输出的数据类型
-    using prot_input_type = InputType;  // 此协议接受的数据类型
-    using prot_output_type = OutputType; // 此协议产生的数据类型
+    using prot_output_type = OutputType; // 此协议的输出数据类型
     
     // 输出操作（实现输出协议）
     // 可以是两种输出协议类型中的任何一种
@@ -531,7 +531,7 @@ struct my_protocol {
     // 可以是两种输入协议类型中的任何一种
     future operator<<(const InputType& data) {
         // 接受输入数据的实现
-        // 返回一个在操作完成时resolve 的future
+        // 返回一个在输入操作完成时resolve 的future
     }
 };
 ```

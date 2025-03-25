@@ -24,8 +24,17 @@ int case_insensitive_compare(const char* s1, const char* s2) {
 #endif
                     }
                 };
+                // HTTP request in situ structure
+                struct req_insitu {
+
+                };
+
+                // HTTP responce in situ structure
+                struct rsp_insitu {
+
+                };
                 
-                // HTTP request structure
+                // HTTP request string structure
                 struct req
                 {
                     // HTTP method (GET, POST, etc.)
@@ -77,7 +86,7 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                     }
                 };
                 
-                // HTTP response structure
+                // HTTP response string structure
                 struct rsp
                 {
                     // HTTP status code
@@ -214,7 +223,6 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                 struct req_parser{
                     __IO_INTERNAL_HEADER_PERMISSION;
                     using prot_output_type = req;
-                    using prot_input_type = std::span<char>;
                     
                     template <typename T_FSM>
                     inline req_parser(fsm<T_FSM>& state_machine) : manager(state_machine.getManager()) {
@@ -340,7 +348,6 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                 struct rsp_parser{
                     __IO_INTERNAL_HEADER_PERMISSION;
                     using prot_output_type = rsp;
-                    using prot_input_type = std::span<char>;
                     
                     template <typename T_FSM>
                     inline rsp_parser(fsm<T_FSM>& state_machine) : manager(state_machine.getManager()) {
@@ -462,6 +469,8 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                         return 0;
                     }
                 };
+
+
             };
         };
     };

@@ -6,7 +6,6 @@ namespace io
             struct udp {
                 __IO_INTERNAL_HEADER_PERMISSION;
                 using prot_output_type = std::pair<std::span<char>, asio::ip::udp::endpoint>;
-                using prot_input_type = std::pair<std::span<char>, asio::ip::udp::endpoint>;
                 static constexpr size_t default_buffer_size = 1024 * 16;
                 template <typename T_FSM>
                 inline udp(fsm<T_FSM>& state_machine) : manager(state_machine.getManager()), asio_sock(manager->io_ctx) {

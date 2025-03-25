@@ -8,8 +8,6 @@ namespace io {
         template <typename T>
             requires std::is_move_constructible_v<T>
         struct chan {
-            using prot_input_type = std::span<T>;
-
             // Input protocol implemention. 
             // The memory's lifetime that is pointed by the std::span must be longer than the future returned.
             // Use the move operator=, not the copy.
@@ -546,20 +544,13 @@ namespace io {
                 inline void operator>>(future_with<prot_output_type>& out_future) {
                     if constexpr (Out_buf_size == 1)
                     {
-                        out_future.future::operator=(this->get_and_copy(std::span(&out_future.data, 1)));
+                        out_future = this->get_and_copy(std::span(&out_future.data, 1));
                     }
                     else
                     {
-                        out_future.future::operator=(this->get_and_copy(std::span(out_future.data.data(), Out_buf_size)));
+                        out_future = this->get_and_copy(std::span(out_future.data.data(), Out_buf_size));
                     }
                 }
-
-                using prot_input_type =
-                    std::conditional_t<
-                    Out_buf_size == 1,
-                    T,
-                    std::span<T>
-                    >;
 
                 [[no_unique_address]] std::conditional_t<
                     Out_buf_size == 1,

@@ -7,7 +7,6 @@ namespace io
                 __IO_INTERNAL_HEADER_PERMISSION;
                 friend class std::optional<tcp>;
                 using prot_output_type = std::span<char>;
-                using prot_input_type = std::span<char>;
                 static constexpr size_t default_buffer_size = 1024 * 16;
                 template <typename T_FSM>
                 inline tcp(fsm<T_FSM>& state_machine) : manager(state_machine.getManager()), asio_sock(manager->io_ctx) {

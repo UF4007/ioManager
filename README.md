@@ -84,7 +84,7 @@ At the heart of io::manager is its Finite State Machine (FSM) implementation, wh
 
 ### Creating a Manager
 
-a io::manager == a thread
+a io::manager == a thread == coroutine executor
 
 ```cpp
 io::manager mgr;
@@ -501,15 +501,13 @@ io::fsm_func<void> use_future_coroutines()
 
 ## Protocols and Pipelines
 
-io::manager provides a powerful protocol and pipeline system that enables efficient data flow processing with a clear protocol stream approach. This system is particularly useful for network applications, data processing, and any scenario requiring structured data flow between components.
+Asynchronous classes transfer asynchronous messages in countless different ways. To standardize them, we've abstracted the "Protocol" interface.
 
 ### Protocol Concept
 
 In io::manager, protocols are divided into two main categories with specific subtypes:
 
 #### Output Protocols (2 types)
-
-An Output Protocol is a protocol that can output data, implementing the `operator>>` operation. There are three distinct types:
 
 1. **Future-with Output Protocol**: 
    - Defines a non-void `prot_output_type` that specifies the type of data it produces
@@ -523,28 +521,22 @@ An Output Protocol is a protocol that can output data, implementing the `operato
 
 #### Input Protocols (2 types)
 
-An Input Protocol is a protocol that can accept input data, implementing the `operator<<` operation. There are two distinct types:
-
 1. **Future-returning Input Protocol**: 
-   - Defines a `prot_input_type` that specifies the type of data it accepts
-   - Implements `operator<<(const prot_input_type&)` that returns a `future`
+   - Implements `operator<<(const T&)` that returns a `future`, where T can be converted from the `prot_output_type` of the previous protocol or the return type of an adapter
    - The returned future resolves when the operation completes
 
 2. **Direct Input Protocol**:
-   - Defines a `prot_input_type` that specifies the type of data it accepts
-   - Implements `operator<<(const prot_input_type&)` that returns `void`
+   - Implements `operator<<(const T&)` that returns `void`, where T can be converted from the `prot_output_type` of the previous protocol or the return type of an adapter
    - Operation completes synchronously or manages its own completion
 
-Many protocols implement both input and output interfaces, making them dual-protocol components that can both receive and send data.
-
 #### Protocol Interface
+
+A protocol class can only have one output type defined in `prot_output_type`, but it can accept numerous input types.
 
 A typical dual-protocol implementation includes:
 
 ```cpp
 struct my_protocol {
-    // Define the data types for input and output
-    using prot_input_type = InputType;  // Type of data this protocol accepts
     using prot_output_type = OutputType; // Type of data this protocol produces
     
     // Output operation (implements Output Protocol)
