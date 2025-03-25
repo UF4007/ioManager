@@ -501,11 +501,11 @@ io::fsm_func<void> use_future_coroutines()
 #### 输入协议（2种类型）
 
 1. **返回Future的输入协议**：
-   - 实现了返回`future`的`operator<<(const T&)`，其中T可以被前级协议输出的`prot_output_type`或适配器返回类型转换得出。
+   - 实现了返回`future`的`operator<<(T&)`，其中T可以被前级协议输出的`prot_output_type`或适配器返回类型转换得出。
    - 返回的future在操作完成时resolve 
 
 2. **直接输入协议**：
-   - 实现了返回`void`的`operator<<(const T&)`，其中T可以被前级协议输出的`prot_output_type`或适配器返回类型转换得出。
+   - 实现了返回`void`的`operator<<(T&)`，其中T可以被前级协议输出的`prot_output_type`或适配器返回类型转换得出。
    - 操作能够立刻完成
 
 #### 协议接口
@@ -529,7 +529,7 @@ struct my_protocol {
     
     // 输入操作（实现输入协议）
     // 可以是两种输入协议类型中的任何一种
-    future operator<<(const InputType& data) {
+    future operator<<(InputType& data) {
         // 接受输入数据的实现
         // 返回一个在输入操作完成时resolve 的future
     }
@@ -569,7 +569,7 @@ auto pipeline = io::pipeline<>() >> output_protocol >> middle_protocol >> input_
 
 ```cpp
 auto pipeline = io::pipeline<>() >> protocol1 >> 
-    [](const Protocol1OutputType& data) -> std::optional<Protocol2InputType> {
+    [](Protocol1OutputType& data) -> std::optional<Protocol2InputType> {
         // 将数据从protocol1的输出转换为protocol2的输入
         // 主动放弃该数据时，返回std::nullopt
         return transformed_data;
@@ -629,58 +629,6 @@ auto pipeline_handle = std::move(pipeline).spawn(fsm, [](int which, bool output_
 1. 用户必须调用 `pipeline::start()` 才能获得可驱动的管线。
 2. 一旦管线启动，就不能添加新的协议。
 3. `pipeline_started` 类是不可移动和不可复制的，确保管线的稳定性。
-
-#### 完整管线示例
-
-这是一个将数据从TCP套接字传输到UDP套接字并返回的完整管线示例：
-
-```cpp
-io::fsm_func<void> pipeline_example() {
-    io::fsm<void>& fsm = co_await io::get_fsm;
-    
-    // 创建协议
-    io::sock::tcp tcp_socket(fsm);
-    io::sock::udp udp_socket(fsm);
-    
-    // 连接TCP套接字
-    asio::ip::tcp::endpoint tcp_endpoint(
-        asio::ip::address::from_string("127.0.0.1"), 8080);
-    co_await tcp_socket.connect(tcp_endpoint);
-    
-    // 绑定UDP套接字
-    asio::ip::udp::endpoint udp_endpoint(
-        asio::ip::address::from_string("0.0.0.0"), 8081);
-    co_await udp_socket.bind(udp_endpoint);
-    
-    // 创建管线：TCP -> UDP -> TCP
-    auto pipeline = io::pipeline<>() >> tcp_socket >> 
-        // 从TCP到UDP的适配器
-        [](const std::span<char>& tcp_data) -> std::optional<std::pair<std::span<char>, asio::ip::udp::endpoint>> {
-            // 创建要发送到的UDP端点
-            asio::ip::udp::endpoint target(
-                asio::ip::address::from_string("127.0.0.1"), 9000);
-            return std::make_pair(tcp_data, target);
-        } >> udp_socket >> 
-        // 从UDP到TCP的适配器
-        [](const std::pair<std::span<char>, asio::ip::udp::endpoint>& udp_data) -> std::optional<std::span<char>> {
-            // 只提取数据部分
-            return udp_data.first;
-        } >> tcp_socket;
-    
-    // 启动管线，获取 pipeline_started 对象
-    auto started_pipeline = std::move(pipeline).start();
-    
-    // 在循环中驱动管线
-    while (true) {
-        // 等待管线完成一个周期
-        started_pipeline <= co_await +started_pipeline;
-        
-        std::cout << "管线周期完成" << std::endl;
-    }
-    
-    co_return;
-}
-```
 
 ## 性能
 

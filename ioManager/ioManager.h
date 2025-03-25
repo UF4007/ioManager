@@ -308,60 +308,46 @@ namespace io
         };
 
         // Buffer class that can own or reference memory pointer, move only.
-        template <typename T = char>
         struct buf
         {
             // Default constructor: empty buffer
-            inline buf() : data_ptr(nullptr), data_size(0), data_capacity(0), _owned(false) {}
+            inline buf() : data_ptr(nullptr), data_size(0), data_capacity(0), _owned(nullptr) {}
             
             // Constructor from pointer, size, capacity and ownership
-            inline buf(T* ptr, size_t size, size_t capacity, bool take_ownership = false)
+            inline buf(char* ptr, size_t size, size_t capacity, char* take_ownership = nullptr)
                 : data_ptr(ptr), data_size(size), data_capacity(capacity), _owned(take_ownership) {}
 
-            explicit inline buf(size_t capacity) : data_ptr(::operator new(capacity * sizeof(T))), data_size(0), data_capacity(capacity), _owned(true) {
-                std::uninitialized_default_construct_n(data_ptr, data_capacity);
+			// Allocates memory with specified capacity
+            explicit inline buf(size_t capacity) : data_ptr((char*)::operator new(capacity)), data_size(0), data_capacity(capacity), _owned(data_ptr) {
+                assert(capacity && "buf error: capacity must be larger than 0");
             }
             
             // Explicit constructor from span (copies data)
-            explicit inline buf(const std::span<const T>& span, size_t capacity = 0) 
-                : data_size(span.size()), data_capacity(capacity == 0 ? span.size() : capacity), _owned(true) 
+            explicit inline buf(const std::span<const char>& span, size_t capacity = 0) 
+                : data_size(span.size()), data_capacity(capacity == 0 ? span.size() : capacity)
             {
-                // If requested capacity is smaller than span size, throw an exception
                 if (capacity > 0 && capacity < span.size()) {
                     assert(!"Buf ERROR: Capacity cannot be smaller than span size");
                 }
                 
-                // Allocate memory
-                data_ptr = static_cast<T *>(::operator new(data_capacity * sizeof(T)));
+                data_ptr = static_cast<char *>(::operator new(data_capacity));
+                _owned = data_ptr;
 
-                // Use uninitialized_copy to construct objects from span
-                std::uninitialized_copy(span.begin(), span.end(), data_ptr);
-
-                // Use uninitialized_default_construct_n for remaining capacity if any
-                if (data_capacity > span.size())
-                {
-                    std::uninitialized_default_construct_n(data_ptr + span.size(), data_capacity - span.size());
-                }
+                std::copy(span.begin(), span.end(), data_ptr);
             }
 
             // Constructor from initializer list
-            inline buf(std::initializer_list<T> init_list, size_t capacity = 0)
-                : data_ptr(::operator new(init_list.size() * sizeof(T))),
+            inline buf(std::initializer_list<char> init_list, size_t capacity = 0)
+                : data_ptr((char*)::operator new(init_list.size())),
                 data_size(init_list.size()),
                 data_capacity(capacity == 0 ? init_list.size() : capacity),
-                _owned(true)
+                _owned(data_ptr)
             {
-                // If requested capacity is smaller than span size, throw an exception
                 if (capacity > 0 && capacity < init_list.size()) {
                     assert(!"Buf ERROR: Capacity cannot be smaller than span size");
                 }
 
-                std::uninitialized_copy(init_list.begin(), init_list.end(), data_ptr);
-
-                if (data_capacity > init_list.size())
-                {
-                    std::uninitialized_default_construct_n(data_ptr + init_list.size(), data_capacity - init_list.size());
-                }
+                std::copy(init_list.begin(), init_list.end(), data_ptr);
             }
             
             // Disable copy constructor and copy assignment
@@ -378,17 +364,15 @@ namespace io
                 other.data_ptr = nullptr;
                 other.data_size = 0;
                 other.data_capacity = 0;
-                other._owned = false;
+                other._owned = nullptr;
             }
             
             // Move assignment
             inline buf& operator=(buf&& other) noexcept {
                 if (this != &other) {
                     // Clean up current resources if _owned
-                    if (_owned && data_ptr) {
-                        // Destroy all objects
-                        std::destroy_n(data_ptr, data_capacity);
-                        ::operator delete(data_ptr);
+                    if (_owned) {
+                        ::operator delete(_owned);
                     }
                     
                     // Move the data from other
@@ -401,47 +385,53 @@ namespace io
                     other.data_ptr = nullptr;
                     other.data_size = 0;
                     other.data_capacity = 0;
-                    other._owned = false;
+                    other._owned = nullptr;
                 }
                 return *this;
             }
             
             // Destructor - properly destruct objects using std::destroy_n before freeing memory
             inline ~buf() {
-                if (_owned && data_ptr) {
-                    // Use std::destroy_n to call destructors for all constructed objects
-                    std::destroy_n(data_ptr, data_capacity);
-                    ::operator delete(data_ptr);
-                    data_ptr = nullptr;
+                if (_owned) {
+                    ::operator delete(_owned);
                 }
             }
             
             // Conversion to span
-            inline operator std::span<T>() {
-                return std::span<T>(data_ptr, data_size);
+            inline operator std::span<char>() {
+                return std::span<char>(data_ptr, data_size);
             }
 
             // Conversion to const span
-            inline operator std::span<const T>() const {
-                return std::span<const T>(data_ptr, data_size);
+            inline operator std::span<const char>() const {
+                return std::span<const char>(data_ptr, data_size);
             }
             
             // Get pointer (transfers ownership)
-            [[nodiscard]] inline T* transfer() {
-                T* ptr = data_ptr;
+            [[nodiscard]] inline char* transfer() {
+                char* ptr = _owned;
                 data_ptr = nullptr;
                 data_size = 0;
                 data_capacity = 0;
-                _owned = false;
+                _owned = nullptr;
+                return ptr;
+            }
+
+            // Get pointer (transfers ownership) with data position
+            [[nodiscard]] inline char* transfer(char*& data_pos) {
+                char* ptr = _owned;
+                data_pos = data_ptr;
+                data_ptr = nullptr;
+                data_size = 0;
+                data_capacity = 0;
+                _owned = nullptr;
                 return ptr;
             }
             
             // Set pointer (takes ownership if specified)
-            inline void reset(T* ptr, size_t size, size_t capacity, bool take_ownership = false) {
-                if (_owned && data_ptr) {
-                    // Destroy all objects
-                    std::destroy_n(data_ptr, data_capacity);
-                    ::operator delete(data_ptr);
+            inline void reset(char* ptr, size_t size, size_t capacity, char* take_ownership = nullptr) {
+                if (_owned) {
+                    ::operator delete(_owned);
                 }
                 
                 data_ptr = ptr;
@@ -453,20 +443,49 @@ namespace io
             // Getters
             inline size_t size() const { return data_size; }
             inline size_t capacity() const { return data_capacity; }
-            inline bool owned() const { return _owned; }
-            inline T* get() const { return data_ptr; }
+            inline char* owned() const { return _owned; }
+            inline char* data() const { return data_ptr; }
             
             // Get span for the unused capacity (between size and capacity)
-            inline std::span<T> unused_span() {
+            inline std::span<char> unused_span() {
                 if (data_ptr == nullptr || data_size >= data_capacity) {
-                    return std::span<T>(); // Empty span
+                    return {}; // Empty span
                 }
-                return std::span<T>(data_ptr + data_size, data_capacity - data_size);
+                return std::span<char>(data_ptr + data_size, data_capacity - data_size);
             }
 
+			inline void resize(size_t new_size) {
+				assert(new_size <= data_capacity && "Buffer overflow: resize would exceed capacity");
+				data_size = new_size;
+			}
+
             inline size_t size_increase(size_t size_inc) {
-                return data_size + size_inc;
+                assert(data_size + size_inc <= data_capacity && "Buffer overflow: size_increase would exceed capacity");
+                data_size += size_inc;
+                return data_size;
             }
+
+			inline size_t size_decrease(size_t size_dec) {
+                assert(size_dec <= data_size && "Buffer underflow: size_decrease would result in negative size");
+				data_size -= size_dec;
+				return data_size;
+			}
+
+			inline void data_increase(size_t data_inc) {
+                assert(_owned && "This function must own this buffer memory.");
+                assert(data_inc <= data_size && "Buffer overflow: size_increase would exceed capacity");
+				data_size -= data_inc;
+                data_capacity -= data_inc;
+                data_ptr += data_inc;
+			}
+
+			inline void data_decrease(size_t data_dec) {
+                assert(_owned && "This function must own this buffer memory.");
+				data_size += data_dec;
+				data_capacity += data_dec;
+                data_ptr -= data_dec;
+                assert(_owned <= data_ptr && "Buffer underflow: size_decrease would result in negative size");
+			}
             
             // Add operator bool to check if the buffer is valid
             inline explicit operator bool() const {
@@ -474,10 +493,10 @@ namespace io
             }
             
         private:
-            T* data_ptr;          // Pointer to data
+            char* data_ptr;          // Pointer to data
             size_t data_size;     // Current size
             size_t data_capacity; // Total capacity
-            bool _owned;          // Whether this buffer owns the memory
+            char* _owned;          // Whether this buffer owns the memory
         };
 
         // -------------------------------coroutine core--------------------------------
@@ -1437,10 +1456,10 @@ namespace io
             };
 
             template <typename F, typename T>
-            struct is_adaptor<F, T, std::void_t<decltype(std::declval<F>()(std::declval<const T&>()))>>
+            struct is_adaptor<F, T, std::void_t<decltype(std::declval<F>()(std::declval<T&>()))>>
             {
             private:
-                using ReturnType = decltype(std::declval<F>()(std::declval<const T&>()));
+                using ReturnType = decltype(std::declval<F>()(std::declval<T&>()));
 
                 template <typename R>
                 struct is_optional : std::false_type {};
@@ -1524,7 +1543,7 @@ namespace io
                                          std::declval<future&>()))>>> 
                     : std::true_type {};
                     
-                // Check if T has U operator<<(const prot_input_type&) where U is convertible to io::future
+                // Check if T has U operator<<(prot_input_type&) where U is convertible to io::future
                 template <typename T, typename Front_prot_output_type, typename Adapter, typename = void>
                 struct has_future_send_op : std::false_type {};
                 
@@ -1532,17 +1551,17 @@ namespace io
 				struct has_future_send_op<T, Front_prot_output_type, Adapter,
                                 std::void_t<decltype(
                                     std::declval<io::future&>() = std::declval<T>().operator<<(
-                                        std::declval<const typename output_trait<Front_prot_output_type, Adapter>::type&>()))> >
+                                        std::declval<typename output_trait<Front_prot_output_type, Adapter>::type&>()))> >
                     : std::true_type {};
                     
-                // Check if T has void operator<<(const prot_input_type&)
+                // Check if T has void operator<<(prot_input_type&)
                 template <typename T, typename Front_prot_output_type, typename Adapter, typename = void>
                 struct has_void_send_op : std::false_type {};
                 
                 template <typename T, typename Front_prot_output_type, typename Adapter>
 				struct has_void_send_op<T, Front_prot_output_type, Adapter,
                                 std::void_t<decltype(std::declval<T>().operator<<(
-                                    std::declval<const typename output_trait<Front_prot_output_type, Adapter>::type&>()))> >
+                                    std::declval<typename output_trait<Front_prot_output_type, Adapter>::type&>()))> >
                     : std::true_type {};
 
                 template <typename T>

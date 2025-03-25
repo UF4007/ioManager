@@ -522,11 +522,11 @@ In io::manager, protocols are divided into two main categories with specific sub
 #### Input Protocols (2 types)
 
 1. **Future-returning Input Protocol**: 
-   - Implements `operator<<(const T&)` that returns a `future`, where T can be converted from the `prot_output_type` of the previous protocol or the return type of an adapter
+   - Implements `operator<<(T&)` that returns a `future`, where T can be converted from the `prot_output_type` of the previous protocol or the return type of an adapter
    - The returned future resolves when the operation completes
 
 2. **Direct Input Protocol**:
-   - Implements `operator<<(const T&)` that returns `void`, where T can be converted from the `prot_output_type` of the previous protocol or the return type of an adapter
+   - Implements `operator<<(T&)` that returns `void`, where T can be converted from the `prot_output_type` of the previous protocol or the return type of an adapter
    - Operation completes synchronously or manages its own completion
 
 #### Protocol Interface
@@ -550,7 +550,7 @@ struct my_protocol {
     
     // Input operation (implements Input Protocol)
     // Can be either of the two input protocol types
-    future operator<<(const InputType& data) {
+    future operator<<(InputType& data) {
         // Implementation for accepting input data
         // Return a future that resolves when the operation completes
     }
@@ -590,7 +590,7 @@ Adapters are functions that transform data between protocols with incompatible t
 
 ```cpp
 auto pipeline = io::pipeline<>() >> protocol1 >> 
-    [](const Protocol1OutputType& data) -> std::optional<Protocol2InputType> {
+    [](Protocol1OutputType& data) -> std::optional<Protocol2InputType> {
         // Transform data from protocol1's output to protocol2's input
         // Return std::nullopt if the data should be skipped
         return transformed_data;
@@ -650,58 +650,6 @@ The `pipeline_started` class encapsulates the started state of the pipeline and 
 1. Users must call `pipeline::start()` to get a drivable pipeline.
 2. Once a pipeline is started, no new protocols can be added.
 3. The `pipeline_started` class is non-movable and non-copyable, ensuring pipeline stability.
-
-#### Complete Pipeline Example
-
-Here's a complete example of a pipeline that transfers data from a TCP socket to a UDP socket and back:
-
-```cpp
-io::fsm_func<void> pipeline_example() {
-    io::fsm<void>& fsm = co_await io::get_fsm;
-    
-    // Create protocols
-    io::sock::tcp tcp_socket(fsm);
-    io::sock::udp udp_socket(fsm);
-    
-    // Connect TCP socket
-    asio::ip::tcp::endpoint tcp_endpoint(
-        asio::ip::address::from_string("127.0.0.1"), 8080);
-    co_await tcp_socket.connect(tcp_endpoint);
-    
-    // Bind UDP socket
-    asio::ip::udp::endpoint udp_endpoint(
-        asio::ip::address::from_string("0.0.0.0"), 8081);
-    co_await udp_socket.bind(udp_endpoint);
-    
-    // Create a pipeline: TCP -> UDP -> TCP
-    auto pipeline = io::pipeline<>() >> tcp_socket >> 
-        // Adapter from TCP to UDP
-        [](const std::span<char>& tcp_data) -> std::optional<std::pair<std::span<char>, asio::ip::udp::endpoint>> {
-            // Create a UDP endpoint to send to
-            asio::ip::udp::endpoint target(
-                asio::ip::address::from_string("127.0.0.1"), 9000);
-            return std::make_pair(tcp_data, target);
-        } >> udp_socket >> 
-        // Adapter from UDP to TCP
-        [](const std::pair<std::span<char>, asio::ip::udp::endpoint>& udp_data) -> std::optional<std::span<char>> {
-            // Extract just the data part
-            return udp_data.first;
-        } >> tcp_socket;
-    
-    // Start the pipeline to get a pipeline_started object
-    auto started_pipeline = std::move(pipeline).start();
-    
-    // Drive the pipeline in a loop
-    while (true) {
-        // Wait for the pipeline to complete a cycle
-        started_pipeline <= co_await +started_pipeline;
-        
-        std::cout << "Pipeline cycle completed" << std::endl;
-    }
-    
-    co_return;
-}
-```
 
 ## Performance
 

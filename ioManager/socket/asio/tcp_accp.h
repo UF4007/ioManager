@@ -9,10 +9,6 @@ namespace io
                 template <typename T_FSM>
                 inline tcp_accp(fsm<T_FSM>& state_machine) : manager(state_machine.getManager()), acceptor(manager->io_ctx), sock(manager->io_ctx) {}
 
-                inline void setBufSize(size_t size) {
-                    buffer_size = size;
-                }
-
                 inline bool bind_and_listen(const asio::ip::tcp::endpoint& endpoint, int backlog = 10) {
                     std::error_code ec;
                     acceptor.open(endpoint.protocol(), ec);
@@ -63,7 +59,7 @@ namespace io
                             auto ptr = prom.resolve_later();
                             if (ptr)
                             {
-                                ptr->emplace(std::move(sock), buffer_size, manager);
+                                ptr->emplace(std::move(sock), manager);
                             }
                             else
                             {
@@ -85,7 +81,6 @@ namespace io
 
             private:
                 io::manager* manager = nullptr;
-                size_t buffer_size = tcp::default_buffer_size;
                 asio::ip::tcp::socket sock;
                 asio::ip::tcp::acceptor acceptor;
             };

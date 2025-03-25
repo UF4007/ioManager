@@ -684,17 +684,13 @@ io::fsm_func<void> coro_udp_echo_with_adapter()
     // Create a pipeline with adapter: socket >> [adapter] >> socket
     // The adapter is used to log received data and peer address
     auto pipeline = io::pipeline<>() >> socket >> 
-        // Adapter from socket output to socket input
-        [](const std::pair<std::span<char>, asio::ip::udp::endpoint>& recv_data) -> std::optional<std::pair<std::span<char>, asio::ip::udp::endpoint>> {
-            // Destructure received data and peer address
+        [](std::pair<io::buf, asio::ip::udp::endpoint>& recv_data) -> std::optional<std::pair<io::buf, asio::ip::udp::endpoint>> {
             const auto& [data, peer] = recv_data;
             
-            // Log received data
             std::string message(data.data(), data.size());
             std::cout << "Received message from " << peer << ": " << message << std::endl;
             
-            // Return original data and peer address without modification
-            return recv_data;
+            return std::move(recv_data);
         } >> socket;
     
     // Start the pipeline and set up error handling callback
@@ -754,7 +750,7 @@ io::fsm_func<void> coro_pipeline_test() {
 
     // 3. Direct Input Protocol - accepts data directly without returning a future
     struct DirectInputProtocol {
-        void operator<<(const std::string& input) {
+        void operator<<(std::string& input) {
             // Process input directly
             std::cout << "DirectInputProtocol received: " << input << std::endl;
         }
@@ -765,7 +761,7 @@ io::fsm_func<void> coro_pipeline_test() {
         io::manager* mngr;
         FutureInputProtocol(io::manager* mngr) :mngr(mngr) {}
         
-        io::future operator<<(const int& input) {
+        io::future operator<<(int& input) {
             // Process input and return a future
             std::cout << "FutureInputProtocol received: " << input << std::endl;
             
@@ -793,7 +789,7 @@ io::fsm_func<void> coro_pipeline_test() {
             std::cout << "DirectBidirectionalProtocol produced: " << output << std::endl;
         }
 
-        void operator<<(const std::string& input) {
+        void operator<<(std::string& input) {
             // Direct input
             std::cout << "DirectBidirectionalProtocol received: " << input << std::endl;
         }
@@ -816,7 +812,7 @@ io::fsm_func<void> coro_pipeline_test() {
             prom.resolve();
         }
         
-        io::future operator<<(const int& input) {
+        io::future operator<<(int& input) {
             // Process input and return a future
             std::cout << "FutureBidirectionalProtocol received: " << input << std::endl;
             
@@ -848,7 +844,7 @@ io::fsm_func<void> coro_pipeline_test() {
             prom.resolve();
         }
         
-        io::future operator<<(const int& input) {
+        io::future operator<<(int& input) {
             // Future input
             std::cout << "MixedBidirectionalProtocol1 received: " << input << std::endl;
             
@@ -879,7 +875,7 @@ io::fsm_func<void> coro_pipeline_test() {
             prom.resolve();
         }
         
-        void operator<<(const std::string& input) {
+        void operator<<(std::string& input) {
             // Direct input
             std::cout << "MixedBidirectionalProtocol2 received: " << input << std::endl;
         }
@@ -901,7 +897,7 @@ io::fsm_func<void> coro_pipeline_test() {
         
         // Need an adapter to convert int to string
         auto pipeline = io::pipeline<>() >> output_prot
-            >> [](const int& value) -> std::optional<std::string> {
+            >> [](int& value) -> std::optional<std::string> {
             return "Number: " + std::to_string(value);
             } 
         >> input_prot;
@@ -921,7 +917,7 @@ io::fsm_func<void> coro_pipeline_test() {
         
         // Need an adapter to convert string to int
         auto pipeline = io::pipeline<>() >> output_prot >> 
-            [](const std::string& value) -> std::optional<int> {
+            [](std::string& value) -> std::optional<int> {
                 return static_cast<int>(value.length());
             } >> input_prot;
         auto started_pipeline = std::move(pipeline).start();
@@ -973,10 +969,10 @@ io::fsm_func<void> coro_pipeline_test() {
         FutureInputProtocol input_prot(fsm.getManager());
         
         auto pipeline = io::pipeline<>() >> output_prot >> 
-            [](const std::string& value) -> std::optional<int> {
+            [](std::string& value) -> std::optional<int> {
                 return static_cast<int>(value.length());
             } >> middle_prot1 >> 
-            [](const std::string& value) -> std::optional<std::string> {
+            [](std::string& value) -> std::optional<std::string> {
                 return "Transformed: " + value;
             } >> middle_prot2 >> input_prot;
             auto started_pipeline = std::move(pipeline).start();

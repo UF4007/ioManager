@@ -5,35 +5,91 @@ namespace io
         namespace sock {
             struct udp {
                 __IO_INTERNAL_HEADER_PERMISSION;
-                using prot_output_type = std::pair<std::span<char>, asio::ip::udp::endpoint>;
-                static constexpr size_t default_buffer_size = 1024 * 16;
+                friend class std::optional<udp>;
+                using prot_output_type = std::pair<io::buf, asio::ip::udp::endpoint>;
+                
                 template <typename T_FSM>
-                inline udp(fsm<T_FSM>& state_machine) : manager(state_machine.getManager()), asio_sock(manager->io_ctx) {
-                    buffer.resize(default_buffer_size);
-                }
+                inline udp(fsm<T_FSM>& state_machine) : manager(state_machine.getManager()), asio_sock(manager->io_ctx) {}
 
-                inline void setBufSize(size_t size) {
-                    buffer.resize(size);
+                inline void setNextBuf(io::buf &&buffer_next) {
+                    buffer = std::move(buffer_next);
                 }
 
                 //receive function
-                inline void operator >>(future_with<std::pair<std::span<char>, asio::ip::udp::endpoint>>& fut) {
+                inline void operator >>(future_with<std::pair<io::buf, asio::ip::udp::endpoint>>& fut) {
                     auto prom = manager->make_future(fut, &fut.data);
                     if (!asio_sock.is_open()) {
                         prom.reject_later(std::make_error_code(std::errc::not_connected));
                         return;
                     }
 
-                    asio_sock.async_receive_from(asio::buffer(buffer), remote_endpoint,
-                        [this, prom = std::move(prom)](const std::error_code& ec, size_t bytes_read) mutable {
+                    //// Get receive buffer size
+                    //std::error_code ec;
+                    //asio::socket_base::receive_buffer_size option;
+                    //asio_sock.get_option(option, ec);
+                    //size_t buf_size = ec ? 65536 : option.value(); // Use 64KB default if get_option fails
+
+                    //io::buf read_buf;
+                    //if (this->buffer)
+                    //{
+                    //    read_buf = std::move(this->buffer);
+                    //}
+                    //else
+                    //{
+                    //    read_buf = io::buf(buf_size);
+                    //}
+
+                    //asio_sock.async_receive_from(
+                    //    asio::buffer(read_buf.unused_span().data(), read_buf.unused_span().size()), 
+                    //    remote_endpoint,
+                    //    [this, read_buf = std::move(read_buf), prom = std::move(prom)]
+                    //    (const std::error_code& ec, size_t bytes_read) mutable {
+                    //        if (ec) {
+                    //            prom.reject_later(ec);
+                    //            return;
+                    //        }
+
+                    //        read_buf.size_increase(bytes_read);
+                    //        auto ptr = prom.resolve_later();
+                    //        if (ptr) {
+                    //            *ptr = std::make_pair(std::move(read_buf), remote_endpoint);
+                    //        }
+                    //    });
+
+                    asio_sock.async_wait(asio::ip::tcp::socket::wait_read,
+                        [this, prom = std::move(prom)](const std::error_code& ec) mutable {
                             if (ec) {
                                 prom.reject_later(ec);
                                 return;
                             }
 
+                            std::error_code read_ec;
+                            if (asio_sock.available(read_ec) == 0) {
+                                prom.reject_later(std::make_error_code(std::errc::connection_aborted));
+                                return;
+                            }
+
                             auto ptr = prom.resolve_later();
-                            if (ptr) {
-                                *ptr = std::make_pair(std::span<char>(buffer.data(), bytes_read), remote_endpoint);
+                            if (ptr)
+                            {
+                                asio::ip::udp::endpoint end;
+                                io::buf read_buf;
+                                if (this->buffer)
+                                {
+                                    read_buf = std::move(this->buffer);
+                                }
+                                else
+                                {
+                                    read_buf = io::buf(asio_sock.available());
+                                }
+                                size_t bytes_read = asio_sock.receive_from(asio::buffer(read_buf.unused_span().data(), read_buf.unused_span().size()), end, 0, read_ec);
+                                read_buf.size_increase(bytes_read);
+                                if (read_ec) {
+                                    prom.reject_later(read_ec);
+                                    return;
+                                }
+
+                                *ptr = std::make_pair(std::move(read_buf), end);
                             }
                         });
                 }
@@ -105,6 +161,67 @@ namespace io
                     return fut;
                 }
 
+                // Add support for io::buf send
+                inline future operator <<(std::pair<io::buf, asio::ip::udp::endpoint>& data) {
+                    // Set non-blocking for newly created sockets
+                    std::error_code ec;
+                    asio_sock.non_blocking(true, ec);
+
+                    future fut;
+                    promise<> prom = manager->make_future(fut);
+                    if (!asio_sock.is_open()) {
+                        prom.reject_later(std::make_error_code(std::errc::not_connected));
+                        return fut;
+                    }
+
+                    // Try immediate non-blocking send first
+                    std::error_code write_ec;
+                    size_t bytes_written = asio_sock.send_to(
+                        asio::buffer(data.first.data(), data.first.size()),
+                        data.second,
+                        0, // flags
+                        write_ec
+                    );
+
+                    // For UDP, if we get a would_block, we should use async send
+                    // If we get any other error, fail immediately
+                    if (!write_ec && bytes_written == data.first.size()) {
+                        prom.resolve_later();
+                        return fut;
+                    }
+
+                    if (write_ec && write_ec != asio::error::would_block) {
+                        prom.reject_later(write_ec);
+                        return fut;
+                    }
+
+                    asio_sock.async_wait(asio::ip::udp::socket::wait_write,
+                        [this, buf = std::move(data.first), endpoint = data.second, prom = std::move(prom)]
+                        (const std::error_code& ec) mutable {
+                            if (ec) {
+                                prom.reject_later(ec);
+                                return;
+                            }
+
+                            std::error_code write_ec;
+                            asio_sock.send_to(
+                                asio::buffer(buf.data(), buf.size()),
+                                endpoint,
+                                0, // flags
+                                write_ec
+                            );
+
+                            if (write_ec) {
+                                prom.reject_later(write_ec);
+                            }
+                            else {
+                                prom.resolve_later();
+                            }
+                        });
+
+                    return fut;
+                }
+
                 inline bool bind(const asio::ip::udp::endpoint& endpoint) {
                     std::error_code ec;
                     asio_sock.open(endpoint.protocol(), ec);
@@ -132,7 +249,7 @@ namespace io
 
             private:
                 io::manager* manager = nullptr;
-                std::string buffer;
+                io::buf buffer;
                 asio::ip::udp::socket asio_sock;
                 asio::ip::udp::endpoint remote_endpoint;
             };

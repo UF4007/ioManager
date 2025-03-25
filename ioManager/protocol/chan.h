@@ -559,7 +559,7 @@ namespace io {
                 > temp;
 
                 // Input protocol implementation
-                inline future operator<<(const T& in) requires (Out_buf_size == 1) {
+                inline future operator<<(T& in) requires (Out_buf_size == 1) {
                     temp = std::move(in);
                     return this->io::chan<T>::operator<<(std::span(&temp, 1));
                 }
