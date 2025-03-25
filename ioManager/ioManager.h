@@ -836,6 +836,7 @@ namespace io
                         return std::chrono::steady_clock::duration{ 0 };
                     return now - previous;
                 }
+                inline auto elapsed() { return std::chrono::steady_clock::now() - previous_tp; }
                 inline void reset() {
                     previous_tp = {};
                 }

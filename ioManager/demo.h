@@ -988,6 +988,302 @@ io::fsm_func<void> coro_pipeline_test() {
     co_return;
 }
 
+io::fsm_func<void> coro_tcp_throughput_test()
+{
+    // Test configuration
+    constexpr size_t TEST_DURATION_SECONDS = 5;
+    constexpr uint16_t SERVER_PORT = 12350;
+    constexpr size_t PACKET_SIZE = 1024 * 64; // 64KB per packet
+    
+    io::fsm<void>& fsm = co_await io::get_fsm;
+    std::cout << "TCP Throughput Test started..." << std::endl;
+    
+    // Start server
+    io::fsm_handle<void> server_handle = fsm.spawn_now(
+        [](uint16_t port, size_t packet_size) -> io::fsm_func<void> {
+            io::fsm<void>& fsm = co_await io::get_fsm;
+            std::cout << "TCP Throughput Server started on port " << port << std::endl;
+            
+            io::sock::tcp_accp acceptor(fsm);
+            if (!acceptor.bind_and_listen(asio::ip::tcp::endpoint(asio::ip::tcp::v4(), port))) {
+                std::cerr << "Failed to bind to port " << port << std::endl;
+                co_return;
+            }
+            
+            // Accept client connection
+            io::future_with<std::optional<io::sock::tcp>> accept_future;
+            acceptor >> accept_future;
+            co_await accept_future;
+            
+            if (!accept_future.data.has_value()) {
+                std::cerr << "Failed to accept connection!" << std::endl;
+                co_return;
+            }
+            
+            io::sock::tcp socket = std::move(accept_future.data.value());
+            std::cout << "Client connected from " << socket.remote_endpoint() << std::endl;
+            
+            // Prepare receive buffer
+            io::buf recv_buffer(packet_size);
+            size_t bytes_received = 0;
+            io::timer::up timer;
+            timer.start();
+            
+            // Process data in a loop
+            while (1) {
+                io::future_with<io::buf> recv_future;
+                socket >> recv_future;
+                co_await recv_future;
+                
+                if (recv_future.getErr()) {
+                    std::cerr << "Error receiving data: " << recv_future.getErr().message() << std::endl;
+                    break;
+                }
+                
+                bytes_received += recv_future.data.size();
+                
+                // Send data back
+                io::future send_future = socket << recv_future.data;
+                co_await send_future;
+                
+                if (send_future.getErr()) {
+                    std::cerr << "Error sending data: " << send_future.getErr().message() << std::endl;
+                    break;
+                }
+            }
+            
+            std::cout << "Server completed." << std::endl;
+            co_return;
+        }(SERVER_PORT, PACKET_SIZE));
+    
+    // Wait a bit for server to start
+    co_await fsm.setTimeout(std::chrono::milliseconds(500));
+    
+    // Start client
+    io::fsm_handle<io::future> client_handle = fsm.spawn_now(
+        [](uint16_t port, size_t packet_size, size_t duration_seconds) -> io::fsm_func<io::future> {
+            auto& fsm = co_await io::get_fsm;
+            std::cout << "TCP Throughput Client connecting to port " << port << std::endl;
+            
+            io::sock::tcp client(fsm);
+            io::future connect_future = client.connect(asio::ip::tcp::endpoint(asio::ip::address::from_string("127.0.0.1"), port));
+            co_await connect_future;
+            
+            if (connect_future.getErr()) {
+                std::cerr << "Failed to connect: " << connect_future.getErr().message() << std::endl;
+                co_return;
+            }
+            
+            std::cout << "Connected to server" << std::endl;
+            
+            // Prepare test data
+            io::buf send_buffer(packet_size);
+            send_buffer.size_increase(packet_size);
+            
+            size_t total_bytes = 0;
+            size_t total_packets = 0;
+            io::timer::up timer;
+            timer.start();
+            
+            std::cout << "Starting throughput test for " << duration_seconds << " seconds..." << std::endl;
+            
+            // Test loop
+            while (timer.elapsed() < std::chrono::seconds(duration_seconds)) {
+                // Send data
+                io::future send_future = client << send_buffer;
+                co_await send_future;
+                
+                if (send_future.getErr()) {
+                    std::cerr << "Error sending data: " << send_future.getErr().message() << std::endl;
+                    break;
+                }
+                
+                // Receive echo
+                io::future_with<io::buf> recv_future;
+                client >> recv_future;
+                co_await recv_future;
+                
+                if (recv_future.getErr()) {
+                    std::cerr << "Error receiving data: " << recv_future.getErr().message() << std::endl;
+                    break;
+                }
+                
+                total_bytes += recv_future.data.size();
+                total_packets++;
+            }
+            
+            auto duration = timer.elapsed();
+            double seconds = std::chrono::duration<double>(duration).count();
+            double mbps = (total_bytes * 8.0) / (1000000.0 * seconds);
+            
+            std::cout << "Throughput Test Results:" << std::endl;
+            std::cout << "  Duration: " << seconds << " seconds" << std::endl;
+            std::cout << "  Total data: " << (total_bytes / (1024.0 * 1024.0)) << " MB" << std::endl;
+            std::cout << "  Packets: " << total_packets << std::endl;
+            std::cout << "  Throughput: " << mbps << " Mbps" << std::endl;
+            
+            // Close connection
+            client.close();
+            co_return;
+        }(SERVER_PORT, PACKET_SIZE, TEST_DURATION_SECONDS));
+    
+    // Wait for client to finish
+    co_await *client_handle;
+    
+    // Start another test after a delay
+    co_await fsm.setTimeout(std::chrono::seconds(5));
+    fsm.getManager()->spawn_later(coro_tcp_throughput_test()).detach();
+}
+
+io::fsm_func<void> coro_tcp_concurrent_connections_test()
+{
+    // Test configuration
+    constexpr uint16_t SERVER_PORT = 12351;
+    constexpr size_t MAX_CONNECTIONS = 100000;
+    constexpr size_t CONNECTION_BATCH = 100; // Connect this many at a time
+    
+    io::fsm<void>& fsm = co_await io::get_fsm;
+    std::cout << "TCP Concurrent Connections Test started..." << std::endl;
+    
+    // Start server
+    io::fsm_handle<void> server_handle = fsm.spawn_now(
+        [](uint16_t port) -> io::fsm_func<void> {
+            io::fsm<void>& fsm = co_await io::get_fsm;
+            std::cout << "TCP Concurrent Connections Server started on port " << port << std::endl;
+            
+            // Counter for active connections
+            std::atomic<size_t>* active_connections = new std::atomic<size_t>(0);
+            std::atomic<size_t>* max_connections = new std::atomic<size_t>(0);
+            
+            io::sock::tcp_accp acceptor(fsm);
+            if (!acceptor.bind_and_listen(asio::ip::tcp::endpoint(asio::ip::tcp::v4(), port), 2000)) { // Large backlog
+                std::cerr << "Failed to bind to port " << port << std::endl;
+                co_return;
+            }
+            
+            // Accept connections in a loop
+            while (1) {
+                io::future_with<std::optional<io::sock::tcp>> accept_future;
+                acceptor >> accept_future;
+                co_await accept_future;
+                
+                if (!accept_future.data.has_value()) {
+                    std::cerr << "Failed to accept connection!" << std::endl;
+                    continue;
+                }
+                
+                // Spawn a handler for each connection
+                fsm.spawn_now(
+                    [socket = std::move(accept_future.data.value()), active_connections, max_connections]() mutable -> io::fsm_func<void> {
+                        io::fsm<void>& fsm = co_await io::get_fsm;
+                        
+                        // Increment connection counter
+                        size_t current = ++(*active_connections);
+                        size_t max = max_connections->load();
+                        if (current > max) {
+                            max_connections->store(current);
+                            //std::cout << "New connection record: " << current << " concurrent connections" << std::endl;
+                        }
+                        
+                        // Echo any data received
+                        io::future_with<io::buf> recv_future;
+                        socket >> recv_future;
+                        co_await recv_future;
+                        
+                        if (!recv_future.getErr()) {
+                            // Echo back
+                            io::future send_future = socket << recv_future.data;
+                            co_await send_future;
+                        }
+                        
+                        // Keep connection open for the test
+                        co_await fsm.setTimeout(std::chrono::seconds(30));
+                        
+                        // Decrement counter when connection closes
+                        --(*active_connections);
+                        socket.close();
+                        co_return;
+                    }())
+                    .detach();
+            }
+            
+            co_return;
+        }(SERVER_PORT));
+    
+    // Wait a bit for server to start
+    co_await fsm.setTimeout(std::chrono::milliseconds(500));
+    
+    // Client part: establish many connections
+    std::cout << "Starting connection test - will establish up to " << MAX_CONNECTIONS << " concurrent connections" << std::endl;
+    
+    std::vector<io::sock::tcp> connections;
+    connections.reserve(MAX_CONNECTIONS);
+    
+    size_t successful_connections = 0;
+    io::timer::up timer;
+    timer.start();
+    
+    // Connect in batches to avoid overloading
+    for (size_t batch = 0; batch < MAX_CONNECTIONS / CONNECTION_BATCH; batch++) {
+        std::vector<io::future> connect_futures;
+        std::vector<io::sock::tcp> batch_connections;
+        
+        // Start a batch of connections
+        for (size_t i = 0; i < CONNECTION_BATCH; i++) {
+            io::sock::tcp client(fsm);
+            io::future connect_future = client.connect(asio::ip::tcp::endpoint(asio::ip::address::from_string("127.0.0.1"), SERVER_PORT));
+            connect_futures.push_back(std::move(connect_future));
+            batch_connections.push_back(std::move(client));
+        }
+        
+        // Wait for all connections in this batch
+        for (size_t i = 0; i < connect_futures.size(); i++) {
+            co_await connect_futures[i];
+            if (!connect_futures[i].getErr()) {
+                // Send a small message on successful connections
+                std::string message = "Hello";
+                std::span<char> span(message.data(), message.size());
+                io::future send_future = batch_connections[i] << span;
+                co_await send_future;
+                
+                // Successful connection
+                connections.push_back(std::move(batch_connections[i]));
+                successful_connections++;
+                
+                if (successful_connections % 100 == 0) {
+                    //std::cout << "Established " << successful_connections << " connections..." << std::endl;
+                }
+            }
+        }
+        
+        // Small delay between batches
+        co_await fsm.setTimeout(std::chrono::milliseconds(10));
+    }
+    
+    auto duration = timer.elapsed();
+    double seconds = std::chrono::duration<double>(duration).count();
+    
+    std::cout << "Connection Test Results:" << std::endl;
+    std::cout << "  Successfully established: " << successful_connections << " connections" << std::endl;
+    std::cout << "  Time taken: " << seconds << " seconds" << std::endl;
+    std::cout << "  Connections per second: " << (successful_connections / seconds) << std::endl;
+    
+    // Keep connections open for a while
+    std::cout << "Maintaining connections for 10 seconds..." << std::endl;
+    co_await fsm.setTimeout(std::chrono::seconds(10));
+    
+    // Close all connections
+    std::cout << "Closing all connections..." << std::endl;
+    for (auto& conn : connections) {
+        conn.close();
+    }
+    connections.clear();
+    
+    // Start another test after a delay
+    co_await fsm.setTimeout(std::chrono::seconds(5));
+    fsm.getManager()->spawn_later(coro_tcp_concurrent_connections_test()).detach();
+}
+
 void io_testmain_v3()
 {
     io::manager mngr;
@@ -1018,7 +1314,7 @@ void io_testmain_v3()
         mngr.spawn_later(coro_chan_peak_shaving()).detach();
         
     // coroutine benchmark
-    if (true)
+    if (false)
         mngr.spawn_later(coro_benchmark()).detach();
 
     // compensated timer test
@@ -1032,6 +1328,14 @@ void io_testmain_v3()
     // tcp echo client
     if (false)
         mngr.spawn_later(coro_tcp_echo_client()).detach();
+
+    // tcp throughput test
+    if (false)
+        mngr.spawn_later(coro_tcp_throughput_test()).detach();
+
+    // tcp concurrent connections test
+    if (true)
+        mngr.spawn_later(coro_tcp_concurrent_connections_test()).detach();
 
     // udp echo
     if (false)

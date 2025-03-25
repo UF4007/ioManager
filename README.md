@@ -655,15 +655,65 @@ The `pipeline_started` class encapsulates the started state of the pipeline and 
 
 Benchmark results on Windows environment (MSVC VS2022) with Intel Core i5-9300HF CPU @ 2.40GHz and 24GB RAM: (30000 coroutines)
 
-### Coroutine Creation Performance
+### Coroutine Performance
 - Average coroutine creation rate: ~4.8 million per second
 - Average creation time: ~208 nanoseconds
 
-### Coroutine Switching Performance
 - Average switching rate: ~115 million switches per second
 - Average switch time: ~8.7 nanoseconds
 
+*The implementation of this benchmark can be found in `demo.h` in the `coro_benchmark()` function.*
+
 These performance metrics demonstrate the high efficiency of ioManager, particularly in coroutine switching where it can handle over 100 million switches per second, approaching the performance of native C++20 coroutines. The library also achieves efficient memory usage through its pooled allocation strategy.
+
+### TCP Throughput Test
+
+This test measures the maximum data transfer rate between a TCP client and server using the ioManager library.
+
+**Test Configuration:**
+- Packet Size: 64KB
+- Test Duration: 5 seconds per run
+- Connection: Local loopback (127.0.0.1)
+
+**Results:**
+
+| Run | Data Transferred | Packets | Throughput |
+|-----|------------------|---------|------------|
+| 1   | 5334.69 MB       | 85,355  | 8950.07 Mbps |
+| 2   | 6134.69 MB       | 98,155  | 10292.20 Mbps |
+| 3   | 5734.88 MB       | 91,758  | 9621.47 Mbps |
+
+**Average:** 9621.25 Mbps (~9.62 Gbps)
+
+*The implementation of this benchmark can be found in `demo.h` in the `coro_tcp_throughput_test()` function.*
+
+These results demonstrate exceptional performance for local TCP communication, with throughput approaching 10 Gbps.
+
+### TCP Concurrent Connections Test
+
+This test evaluates the ability to establish and maintain a large number of concurrent TCP connections.
+
+**Test Configuration:**
+- Connection: Local loopback (127.0.0.1)
+- Connection Establishment: Batched (100 connections per batch)
+
+**Results for 10,000 Connections Target:**
+
+| Run | Connections Established | Time Taken | Connection Rate |
+|-----|-------------------------|------------|-----------------|
+| 1   | 10,000                  | 3.38 sec   | 2953.55 conn/sec |
+| 2   | 10,000                  | 3.10 sec   | 3223.65 conn/sec |
+
+**Results for 100,000 Connections Target:**
+
+| Run | Connections Established | Time Taken | Connection Rate |
+|-----|-------------------------|------------|-----------------|
+| 1   | 64,165                  | 25.55 sec  | 2511.29 conn/sec |
+| 2   | 64,168                  | 25.61 sec  | 2505.32 conn/sec |
+
+*The implementation of this benchmark can be found in `demo.h` in the `coro_tcp_concurrent_connections_test()` function.*
+
+The system successfully established 10,000 concurrent connections at a rate of over 3,000 connections per second. When attempting to reach 100,000 connections, the system reached approximately 64,000 connections, which is the practical limit due to the available ephemeral port range on a single loopback IP address.
 
 ## License
 
