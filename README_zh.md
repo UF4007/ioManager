@@ -632,9 +632,12 @@ auto pipeline_handle = std::move(pipeline).spawn(fsm, [](int which, bool output_
 
 ## 性能
 
-基于 Intel Core i5-9300HF CPU @ 2.40GHz 和 24GB RAM 的 Windows 环境（MSVC VS2022）进行的基准测试结果：（30000协程下）
+基于 Intel Core i5-9300HF CPU @ 2.40GHz 和 24GB RAM 的 Windows 环境（MSVC VS2022）进行的基准测试结果：
 
 ### 协程性能
+
+30000协程下：
+
 - 平均每秒创建协程数：约 4.8 百万次/秒
 - 平均协程创建时间：约 208 纳秒
 

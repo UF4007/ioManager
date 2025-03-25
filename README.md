@@ -653,9 +653,12 @@ The `pipeline_started` class encapsulates the started state of the pipeline and 
 
 ## Performance
 
-Benchmark results on Windows environment (MSVC VS2022) with Intel Core i5-9300HF CPU @ 2.40GHz and 24GB RAM: (30000 coroutines)
+Benchmark results on Windows environment (MSVC VS2022) with Intel Core i5-9300HF CPU @ 2.40GHz and 24GB RAM:
 
 ### Coroutine Performance
+
+ In 30000 coroutines:
+
 - Average coroutine creation rate: ~4.8 million per second
 - Average creation time: ~208 nanoseconds
 
