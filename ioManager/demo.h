@@ -1314,7 +1314,7 @@ void io_testmain_v3()
         mngr.spawn_later(coro_chan_peak_shaving()).detach();
         
     // coroutine benchmark
-    if (false)
+    if (true)
         mngr.spawn_later(coro_benchmark()).detach();
 
     // compensated timer test
@@ -1334,7 +1334,7 @@ void io_testmain_v3()
         mngr.spawn_later(coro_tcp_throughput_test()).detach();
 
     // tcp concurrent connections test
-    if (true)
+    if (false)
         mngr.spawn_later(coro_tcp_concurrent_connections_test()).detach();
 
     // udp echo
