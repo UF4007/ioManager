@@ -722,10 +722,10 @@ The system successfully established 10,000 concurrent connections at a rate of o
 
 This test evaluates the performance of the minimal HTTP RPC server implementation in the library.
 
-| Test Scenario | Configuration | Requests/sec | Avg Latency | Transfer/sec |
-|---------------|--------------|--------------|-------------|--------------|
-| High Concurrency | 12 threads, 10,000 connections, 30s | 23,064.67 | 31.57ms | 3.72MB |
-| Moderate Load | 2 threads, 100 connections, 10s | 25,665.37 | 3.55ms | 4.14MB |
+| Test Scenario | Configuration | Requests/sec | Avg Latency |
+|---------------|--------------|--------------|-------------|
+| High Concurrency | 12 threads, 10,000 connections, 30s | 23,064.67 | 31.57ms |
+| Moderate Load | 2 threads, 100 connections, 10s | 25,665.37 | 3.55ms |
 
 *The HTTP server implementation can be found in `demo.h` in the `coro_http_rpc_demo()` function.*
 
