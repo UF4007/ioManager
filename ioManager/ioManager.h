@@ -1740,7 +1740,7 @@ namespace io
                 trait::is_input_prot<std::remove_reference_t<T>, typename std::remove_reference_t<Rear>::prot_output_type, void>::value&&
                 trait::is_compatible_prot_pair_v<std::remove_reference_t<Rear>, std::remove_reference_t<T>, void>
                 )
-                inline auto operator>>(T&& rear)&& {
+                inline decltype(auto) operator>>(T&& rear)&& {
                 return pipeline<std::remove_reference_t<decltype(*this)>,
                     std::conditional_t<
                     std::is_lvalue_reference_v<T>,
@@ -1755,7 +1755,7 @@ namespace io
                 trait::is_output_prot<std::remove_reference_t<Rear>>::value&&
                 trait::is_adaptor<T, typename std::remove_reference_t<Rear>::prot_output_type>::value
                 )
-                inline auto operator>>(T&& adaptor)&& {
+                inline decltype(auto) operator>>(T&& adaptor)&& {
                 return pipeline_constructor<std::remove_reference_t<decltype(*this)>, void,
                     std::conditional_t<
                     std::is_lvalue_reference_v<T>,
@@ -1777,6 +1777,7 @@ namespace io
             void operator=(pipeline&) = delete;
 
             pipeline(pipeline&&) = default;
+            pipeline& operator=(pipeline&&) = default;
             
         private:
             inline decltype(auto) awaitable() {
@@ -1980,23 +1981,29 @@ namespace io
             }
 
             // Constructor for pipeline with front and rear protocols (no adaptor)
-            inline pipeline(Front&& f, Rear&& r)
-            : front(std::forward<Front>(f))
-                , rear(std::forward<Rear>(r)) {
+            template <typename F, typename R>
+            inline pipeline(F&& f, R&& r)
+            : front(std::forward<F>(f))
+                , rear(std::forward<R>(r)) {
             }
 
+            //inline pipeline(Front&& f, Rear&& r)
+            //    : front(std::forward<Front>(f))
+            //    , rear(std::forward<Rear>(r)) {
+            //}
+
             // Constructor for pipeline with front, rear and adaptor
-            template <typename U = Adaptor>
-            inline pipeline(Front&& f, Rear&& r, std::enable_if<!std::is_void_v<U>, U>::type&& a)
-            : front(std::forward<Front>(f))
-                , rear(std::forward<Rear>(r))
+            template <typename F, typename R, typename U = Adaptor>
+            inline pipeline(F&& f, R&& r, std::enable_if<!std::is_void_v<U>, U>::type&& a)
+            : front(std::forward<F>(f))
+                , rear(std::forward<R>(r))
                 , adaptor(std::forward<U>(a)) {
             }
 
-            template <typename U = Adaptor>
-            inline pipeline(Front&& f, Rear&& r, int a)
-            : front(std::forward<Front>(f))
-                , rear(std::forward<Rear>(r)) {
+            template <typename F, typename R, typename U = Adaptor>
+            inline pipeline(F&& f, R&& r, int a)
+            : front(std::forward<F>(f))
+                , rear(std::forward<R>(r)) {
             }
 
             Front front;
@@ -2028,7 +2035,7 @@ namespace io
                 std::is_void_v<Adaptor>&&
                 trait::is_adaptor<T, typename trait::is_output_prot_gen<std::remove_reference_t<Front>>::prot_output_type>::value
                 )
-                inline auto operator>>(T&& adaptor)&& {
+                inline decltype(auto) operator>>(T&& adaptor)&& {
                 return pipeline_constructor<Front, void,
                     std::conditional_t<
                     std::is_lvalue_reference_v<T>,
@@ -2045,7 +2052,7 @@ namespace io
                 trait::is_input_prot<typename std::remove_reference_t<T>, typename trait::is_output_prot_gen<std::remove_reference_t<Front>>::prot_output_type, Adaptor>::value&&
                 trait::is_compatible_prot_pair_v<std::remove_reference_t<Front>, std::remove_reference_t<T>, Adaptor>
                 )
-                inline auto operator>>(T&& rear)&& {
+                inline decltype(auto) operator>>(T&& rear)&& {
                 return pipeline<Front,
                     std::conditional_t<
                     std::is_lvalue_reference_v<T>,
@@ -2055,14 +2062,14 @@ namespace io
             }
 
             // Create final pipeline with input protocol and adaptor
-            template<typename T>
+            template <typename T>
                 requires (
                 std::is_void_v<Rear> &&
                 !std::is_void_v<Adaptor>&&
                 trait::is_input_prot<std::remove_reference_t<T>, typename trait::is_output_prot_gen<std::remove_reference_t<Front>>::prot_output_type, Adaptor>::value&&
                 trait::is_compatible_prot_pair_v<std::remove_reference_t<Front>, std::remove_reference_t<T>, Adaptor>
                 )
-                inline auto operator>>(T&& rear)&& {
+                inline decltype(auto) operator>>(T&& rear)&& {
                 return pipeline<Front,
                     std::conditional_t<
                     std::is_lvalue_reference_v<T>,
@@ -2072,18 +2079,19 @@ namespace io
             }
 
         private:
-            inline pipeline_constructor(Front&& f)
-                : front(std::forward<Front>(f)) {
+            template <typename F>
+            inline pipeline_constructor(F&& f)
+                : front(std::forward<F>(f)) {
             }
 
-            template <typename U = Adaptor>
-            inline pipeline_constructor(Front&& f, std::enable_if<!std::is_void_v<U>, U>::type&& a)
-                : front(std::forward<Front>(f)), adaptor(std::forward<U>(a)) {
+            template <typename F, typename U = Adaptor>
+            inline pipeline_constructor(F&& f, std::enable_if<!std::is_void_v<U>, U>::type&& a)
+                : front(std::forward<F>(f)), adaptor(std::forward<U>(a)) {
             }
 
-            template <typename U = Adaptor>
-            inline pipeline_constructor(Front&& f, int a)   //never use
-                : front(std::forward<Front>(f)) {
+            template <typename F, typename U = Adaptor>
+            inline pipeline_constructor(F&& f, int a)   //never use
+                : front(std::forward<F>(f)) {
             }
             Front front;
             [[no_unique_address]] std::conditional_t<std::is_void_v<Adaptor>, std::monostate, Adaptor> adaptor;
@@ -2172,7 +2180,7 @@ namespace io
             };
             
             template <typename F>
-            def(F) -> def<typename std::remove_reference_t<typename trait::function_traits<F>::template arg<0>::type>,
+            def(F) -> def<typename trait::function_traits<F>::template arg<0>::type,
                           typename trait::function_traits<F>::result_type>;
         };
 
@@ -2190,15 +2198,16 @@ namespace io
             }
             
             // Call operator to invoke the appropriate handler
-            inline response_type operator()(const std::pair<key_type, request_type>& request) {
-                const auto& [key_, req_] = request;
-                auto it = handlers_.find(key_);
+			template <typename K, typename R>
+            inline response_type operator()(K&& req_, R&& rsp_) {
+                auto it = handlers_.find(std::forward<K>(req_));
                 if (it != handlers_.end()) {
-                    return it->second(req_);
+                    return it->second(std::forward<R>(rsp_));
                 } else if (default_handler_) {
-                    return default_handler_(req_);
+                    return default_handler_(std::forward<R>(rsp_));
                 } else {
                     assert(!"rpc ERROR: No handler found for key and no default handler provided");
+                    return it->second(std::forward<R>(rsp_));
                 }
             }
 
@@ -2228,12 +2237,17 @@ namespace io
         };
 
         // blackhole adaptor
-        template<typename Out, typename In>
-        struct blackhole {
+        template <typename Out, typename In>
+        struct blackhole_adaptor {
             inline std::optional<In> operator()(const Out&) {
                 return std::nullopt;
             }
         };
+
+        template <typename T>
+		struct blackhole_protocol {
+			inline void operator<<(T&) {}
+		};
 
 #include "internal/definitions.h"
     }

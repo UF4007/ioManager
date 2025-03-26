@@ -4,6 +4,7 @@
 #include <stdarg.h>
 #include <stdint.h>
 #include <string.h>
+#include <string_view>
 #include <cwchar>
 #include <queue>
 #include <memory>

@@ -10,3 +10,7 @@
 #ifndef IO_USE_ASIO
 #define IO_USE_ASIO 1
 #endif
+
+#ifndef IO_USE_OPENSSL
+#define IO_USE_OPENSSL 0
+#endif

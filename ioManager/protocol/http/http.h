@@ -24,135 +24,327 @@ int case_insensitive_compare(const char* s1, const char* s2) {
 #endif
                     }
                 };
-                // HTTP request in situ structure
-                struct req_insitu {
-
-                };
-
-                // HTTP responce in situ structure
-                struct rsp_insitu {
-
-                };
                 
-                // HTTP request string structure
-                struct req
-                {
-                    // HTTP method (GET, POST, etc.)
+                // HTTP request in-situ structure (holds references to original buffers)
+                struct req_insitu {
                     llhttp::llhttp_method_t method;
+                    std::string_view url;
+                    std::uint8_t major_version;
+                    std::uint8_t minor_version;
                     
-                    // URL from the request
-                    std::string url;
+                    std::map<std::string_view, std::string_view> headers;
                     
-                    // HTTP version
-                    uint8_t major_version;
-                    uint8_t minor_version;
+                    std::vector<std::string_view> body_fragments;
                     
-                    // Headers storage
-                    std::unordered_map<std::string, std::string> headers;
-                    
-                    // Request body
-                    std::string body;
+                    std::vector<io::buf> raw_buffers;
                     
                     // Get header value by name (case-insensitive)
-                    inline std::string_view get_header(const std::string& name) const {
+                    inline std::string_view get_header(const std::string_view& name) const {
                         for (const auto& [key, value] : headers) {
-                            if (llhttp::case_insensitive_compare(key.c_str(), name.c_str()) == 0) {
+                            if (llhttp::case_insensitive_compare(key.data(), name.data()) == 0) {
                                 return value;
                             }
                         }
                         return {};
-                    }
-                    
-                    // Check if a header exists
-                    inline bool has_header(const std::string& name) const {
-                        return !get_header(name).empty();
-                    }
-                    
-                    // Get content length
-                    inline size_t content_length() const {
-                        auto cl = get_header("Content-Length");
-                        if (cl.empty()) return 0;
-                        return std::stoul(std::string(cl));
-                    }
-                    
-                    // Get content type
-                    inline std::string_view content_type() const {
-                        return get_header("Content-Type");
                     }
                     
                     // Convert method to string
                     inline std::string_view method_name() const {
                         return llhttp::llhttp_method_name(method);
                     }
-                };
-                
-                // HTTP response string structure
-                struct rsp
-                {
-                    // HTTP status code
-                    int status_code;
                     
-                    // Status message
-                    std::string status_message;
-                    
-                    // HTTP version
-                    uint8_t major_version;
-                    uint8_t minor_version;
-                    
-                    // Headers storage
-                    std::unordered_map<std::string, std::string> headers;
-                    
-                    // Response body
-                    std::string body;
-                    
-                    // Constructor with default values
-                    inline rsp() : status_code(200), major_version(1), minor_version(1) {}
-                    
-                    // Constructor with status code
-                    inline rsp(int code) : status_code(code), major_version(1), minor_version(1) {
-                        status_message = default_status_message(code);
+                    // Get body size (combined size of all fragments)
+                    inline size_t body_size() const {
+                        size_t total_size = 0;
+                        for (const auto& fragment : body_fragments) {
+                            total_size += fragment.size();
+                        }
+                        return total_size;
                     }
+
+                    req_insitu() = default;
+                    req_insitu(req_insitu&&) = default;
+                    req_insitu& operator=(req_insitu&&) = default;
+
+                    IO_MANAGER_BAN_COPY(req_insitu);
+                };
+
+                // HTTP response in-situ structure (holds references to original buffers)
+                struct rsp_insitu {
+                    int status_code;
+                    std::string_view status_message;
+                    std::uint8_t major_version;
+                    std::uint8_t minor_version;
                     
+                    std::map<std::string_view, std::string_view> headers;
+                    
+                    std::vector<std::string_view> body_fragments;
+                    
+                    std::vector<io::buf> raw_buffers;
+
                     // Get header value by name (case-insensitive)
-                    inline std::string_view get_header(const std::string& name) const {
+                    inline std::string_view get_header(const std::string_view& name) const {
                         for (const auto& [key, value] : headers) {
-                            if (llhttp::case_insensitive_compare(key.c_str(), name.c_str()) == 0) {
+                            if (llhttp::case_insensitive_compare(key.data(), name.data()) == 0) {
                                 return value;
                             }
                         }
                         return {};
                     }
                     
-                    // Check if a header exists
-                    inline bool has_header(const std::string& name) const {
-                        return !get_header(name).empty();
+                    // Get body size (combined size of all fragments)
+                    inline size_t body_size() const {
+                        size_t total_size = 0;
+                        for (const auto& fragment : body_fragments) {
+                            total_size += fragment.size();
+                        }
+                        return total_size;
+                    }
+
+                    rsp_insitu() = default;
+                    rsp_insitu(rsp_insitu&&) = default;
+                    rsp_insitu& operator=(rsp_insitu&&) = default;
+
+                    IO_MANAGER_BAN_COPY(rsp_insitu);
+                };
+                
+                // HTTP request string structure
+                struct req
+                {
+                    std::string method;
+                    std::string url;
+                    uint8_t major_version;
+                    uint8_t minor_version;
+                    
+                    std::map<std::string, std::string> headers;
+                    
+                    std::string body;
+                    
+                    // Default constructor
+                    inline req() = default;
+                    
+                    // Constructor from in-situ request
+                    inline req(const req_insitu& insitu) 
+                        : method(std::string(insitu.method_name()))
+                        , url(insitu.url)
+                        , major_version(insitu.major_version)
+                        , minor_version(insitu.minor_version)
+                    {
+                        // Copy headers
+                        for (const auto& [key, value] : insitu.headers) {
+                            headers[std::string(key)] = std::string(value);
+                        }
+                        
+                        // Combine body fragments into a single string
+                        if (!insitu.body_fragments.empty()) {
+                            size_t total_size = insitu.body_size();
+                            body.reserve(total_size);
+                            
+                            for (const auto& fragment : insitu.body_fragments) {
+                                body.append(fragment);
+                            }
+                        }
+                    }
+
+                    // Serialize a string-based request to a single buffer
+                    io::buf serialize() {
+                        auto& request = *this;
+                        // Calculate total size needed
+                        size_t total_size = 0;
+
+                        // Request line
+                        total_size += request.method.size() + 1; // method + space
+                        total_size += request.url.size() + 1;    // url + space
+                        total_size += 5;                         // "HTTP/"
+                        total_size += 1;                         // major version
+                        total_size += 1;                         // "."
+                        total_size += 1;                         // minor version
+                        total_size += 2;                         // "\r\n"
+
+                        // Headers
+                        for (const auto& [key, value] : request.headers) {
+                            total_size += key.size() + 2;        // key + ": "
+                            total_size += value.size() + 2;      // value + "\r\n"
+                        }
+
+                        // Check if Content-Length header is needed
+                        bool has_content_length = false;
+                        if (!request.body.empty()) {
+                            for (const auto& [key, value] : request.headers) {
+                                if (llhttp::case_insensitive_compare(key.c_str(), "Content-Length") == 0) {
+                                    has_content_length = true;
+                                    break;
+                                }
+                            }
+
+                            if (!has_content_length) {
+                                // Content-Length: + number + \r\n
+                                std::string content_length = std::to_string(request.body.size());
+                                total_size += 16 + content_length.size() + 2; // "Content-Length: " + size + "\r\n"
+                            }
+                        }
+
+                        // End of headers line
+                        total_size += 2;                         // "\r\n"
+
+                        // Body
+                        total_size += request.body.size();
+
+                        // Allocate buffer of the calculated size
+                        io::buf buffer(total_size);
+                        char* ptr = static_cast<char*>(buffer.data());
+                        size_t remaining = total_size;
+
+                        // Copy request line
+                        size_t len = request.method.size();
+                        std::memcpy(ptr, request.method.data(), len);
+                        ptr += len;
+                        remaining -= len;
+
+                        *ptr++ = ' ';
+                        remaining--;
+
+                        len = request.url.size();
+                        std::memcpy(ptr, request.url.data(), len);
+                        ptr += len;
+                        remaining -= len;
+
+                        *ptr++ = ' ';
+                        remaining--;
+
+                        const char* http_ver = "HTTP/";
+                        len = 5; // Length of "HTTP/"
+                        std::memcpy(ptr, http_ver, len);
+                        ptr += len;
+                        remaining -= len;
+
+                        *ptr++ = '0' + request.major_version;
+                        remaining--;
+
+                        *ptr++ = '.';
+                        remaining--;
+
+                        *ptr++ = '0' + request.minor_version;
+                        remaining--;
+
+                        *ptr++ = '\r';
+                        *ptr++ = '\n';
+                        remaining -= 2;
+
+                        // Copy headers
+                        for (const auto& [key, value] : request.headers) {
+                            len = key.size();
+                            std::memcpy(ptr, key.data(), len);
+                            ptr += len;
+                            remaining -= len;
+
+                            *ptr++ = ':';
+                            *ptr++ = ' ';
+                            remaining -= 2;
+
+                            len = value.size();
+                            std::memcpy(ptr, value.data(), len);
+                            ptr += len;
+                            remaining -= len;
+
+                            *ptr++ = '\r';
+                            *ptr++ = '\n';
+                            remaining -= 2;
+                        }
+
+                        // Add Content-Length header if needed
+                        if (!request.body.empty() && !has_content_length) {
+                            const char* cl_header = "Content-Length: ";
+                            len = 16; // Length of "Content-Length: "
+                            std::memcpy(ptr, cl_header, len);
+                            ptr += len;
+                            remaining -= len;
+
+                            std::string content_length = std::to_string(request.body.size());
+                            len = content_length.size();
+                            std::memcpy(ptr, content_length.data(), len);
+                            ptr += len;
+                            remaining -= len;
+
+                            *ptr++ = '\r';
+                            *ptr++ = '\n';
+                            remaining -= 2;
+                        }
+
+                        // End of headers
+                        *ptr++ = '\r';
+                        *ptr++ = '\n';
+                        remaining -= 2;
+
+                        // Copy body
+                        if (!request.body.empty()) {
+                            len = request.body.size();
+                            std::memcpy(ptr, request.body.data(), len);
+                            ptr += len;
+                            remaining -= len;
+                        }
+
+                        // Verify we used exactly the amount of space we calculated
+                        assert(remaining == 0 && "Buffer size calculation was incorrect");
+
+                        buffer.resize(buffer.capacity());
+                        return buffer;
+                    }
+                };
+                
+                // HTTP response string structure
+                struct rsp
+                {
+                    int status_code;
+                    
+                    std::string status_message;
+                    
+                    uint8_t major_version;
+                    uint8_t minor_version;
+                    
+                    std::map<std::string, std::string> headers;
+                    
+                    std::string body;
+                    
+                    // Constructor with default values
+                    inline rsp() 
+                        : status_code(200)
+                        , status_message("OK")
+                        , major_version(1)
+                        , minor_version(1) 
+                    {
                     }
                     
-                    // Set a header
-                    inline void set_header(const std::string& name, const std::string& value) {
-                        headers[name] = value;
+                    // Constructor with status code
+                    inline rsp(int code) 
+                        : status_code(code)
+                        , status_message(default_status_message(code))
+                        , major_version(1)
+                        , minor_version(1) 
+                    {
                     }
                     
-                    // Get content length
-                    inline size_t content_length() const {
-                        auto cl = get_header("Content-Length");
-                        if (cl.empty()) return 0;
-                        return std::stoul(std::string(cl));
-                    }
-                    
-                    // Get content type
-                    inline std::string_view content_type() const {
-                        return get_header("Content-Type");
-                    }
-                    
-                    // Set content type
-                    inline void set_content_type(const std::string& type) {
-                        set_header("Content-Type", type);
-                    }
-                    
-                    // Set content length
-                    inline void set_content_length(size_t length) {
-                        set_header("Content-Length", std::to_string(length));
+                    // Constructor from in-situ response
+                    inline rsp(const rsp_insitu& insitu)
+                        : status_code(insitu.status_code)
+                        , status_message(insitu.status_message)
+                        , major_version(insitu.major_version)
+                        , minor_version(insitu.minor_version)
+                    {
+                        // Copy headers
+                        for (const auto& [key, value] : insitu.headers) {
+                            headers[std::string(key)] = std::string(value);
+                        }
+                        
+                        // Combine body fragments into a single string
+                        if (!insitu.body_fragments.empty()) {
+                            size_t total_size = insitu.body_size();
+                            body.reserve(total_size);
+                            
+                            for (const auto& fragment : insitu.body_fragments) {
+                                body.append(fragment);
+                            }
+                        }
                     }
                     
                     // Get default status message for a status code
@@ -196,74 +388,244 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                             default: return "Unknown";
                         }
                     }
-                    
-                    // Serialize response to string
-                    inline std::string to_string() const {
-                        std::stringstream ss;
-                        
+
+                    // Serialize a string-based response to a single buffer
+                    io::buf serialize() {
+                        auto& response = *this;
+                        // Calculate total size needed
+                        size_t total_size = 0;
+
                         // Status line
-                        ss << "HTTP/" << (int)major_version << "." << (int)minor_version 
-                           << " " << status_code << " " << status_message << "\r\n";
-                        
+                        total_size += 5;                         // "HTTP/"
+                        total_size += 1;                         // major version
+                        total_size += 1;                         // "."
+                        total_size += 1;                         // minor version
+                        total_size += 1;                         // space
+
+                        std::string status_code_str = std::to_string(response.status_code);
+                        total_size += status_code_str.size() + 1;// status code + space
+
+                        total_size += response.status_message.size() + 2; // status message + "\r\n"
+
                         // Headers
-                        for (const auto& [name, value] : headers) {
-                            ss << name << ": " << value << "\r\n";
+                        for (const auto& [key, value] : response.headers) {
+                            total_size += key.size() + 2;        // key + ": "
+                            total_size += value.size() + 2;      // value + "\r\n"
                         }
-                        
-                        // Empty line separating headers from body
-                        ss << "\r\n";
-                        
+
+                        // Check if Content-Length header is needed
+                        bool has_content_length = false;
+                        if (!response.body.empty()) {
+                            for (const auto& [key, value] : response.headers) {
+                                if (llhttp::case_insensitive_compare(key.c_str(), "Content-Length") == 0) {
+                                    has_content_length = true;
+                                    break;
+                                }
+                            }
+
+                            if (!has_content_length) {
+                                // Content-Length: + number + \r\n
+                                std::string content_length = std::to_string(response.body.size());
+                                total_size += 16 + content_length.size() + 2; // "Content-Length: " + size + "\r\n"
+                            }
+                        }
+
+                        // End of headers line
+                        total_size += 2;                         // "\r\n"
+
                         // Body
-                        ss << body;
-                        
-                        return ss.str();
+                        total_size += response.body.size();
+
+                        // Allocate buffer of the calculated size
+                        io::buf buffer(total_size);
+                        char* ptr = static_cast<char*>(buffer.data());
+                        size_t remaining = total_size;
+
+                        // Copy status line
+                        const char* http_ver = "HTTP/";
+                        size_t len = 5; // Length of "HTTP/"
+                        std::memcpy(ptr, http_ver, len);
+                        ptr += len;
+                        remaining -= len;
+
+                        *ptr++ = '0' + response.major_version;
+                        remaining--;
+
+                        *ptr++ = '.';
+                        remaining--;
+
+                        *ptr++ = '0' + response.minor_version;
+                        remaining--;
+
+                        *ptr++ = ' ';
+                        remaining--;
+
+                        // Status code
+                        len = status_code_str.size();
+                        std::memcpy(ptr, status_code_str.data(), len);
+                        ptr += len;
+                        remaining -= len;
+
+                        *ptr++ = ' ';
+                        remaining--;
+
+                        // Status message
+                        len = response.status_message.size();
+                        std::memcpy(ptr, response.status_message.data(), len);
+                        ptr += len;
+                        remaining -= len;
+
+                        *ptr++ = '\r';
+                        *ptr++ = '\n';
+                        remaining -= 2;
+
+                        // Copy headers
+                        for (const auto& [key, value] : response.headers) {
+                            len = key.size();
+                            std::memcpy(ptr, key.data(), len);
+                            ptr += len;
+                            remaining -= len;
+
+                            *ptr++ = ':';
+                            *ptr++ = ' ';
+                            remaining -= 2;
+
+                            len = value.size();
+                            std::memcpy(ptr, value.data(), len);
+                            ptr += len;
+                            remaining -= len;
+
+                            *ptr++ = '\r';
+                            *ptr++ = '\n';
+                            remaining -= 2;
+                        }
+
+                        // Add Content-Length header if needed
+                        if (!response.body.empty() && !has_content_length) {
+                            const char* cl_header = "Content-Length: ";
+                            len = 16; // Length of "Content-Length: "
+                            std::memcpy(ptr, cl_header, len);
+                            ptr += len;
+                            remaining -= len;
+
+                            std::string content_length = std::to_string(response.body.size());
+                            len = content_length.size();
+                            std::memcpy(ptr, content_length.data(), len);
+                            ptr += len;
+                            remaining -= len;
+
+                            *ptr++ = '\r';
+                            *ptr++ = '\n';
+                            remaining -= 2;
+                        }
+
+                        // End of headers
+                        *ptr++ = '\r';
+                        *ptr++ = '\n';
+                        remaining -= 2;
+
+                        // Copy body
+                        if (!response.body.empty()) {
+                            len = response.body.size();
+                            std::memcpy(ptr, response.body.data(), len);
+                            ptr += len;
+                            remaining -= len;
+                        }
+
+                        // Verify we used exactly the amount of space we calculated
+                        assert(remaining == 0 && "Buffer size calculation was incorrect");
+
+                        buffer.resize(buffer.capacity());
+                        return buffer;
                     }
                 };
                 
+                // HTTP request parser - parses io::buf into req_insitu
                 struct req_parser{
-                    __IO_INTERNAL_HEADER_PERMISSION;
-                    using prot_output_type = req;
+                    using prot_output_type = req_insitu;
                     
                     template <typename T_FSM>
                     inline req_parser(fsm<T_FSM>& state_machine) : manager(state_machine.getManager()) {
-                        llhttp::llhttp_settings_t settings;
                         llhttp::llhttp_settings_init(&settings);
                         
                         // Set callback functions
                         settings.on_message_begin = on_message_begin;
                         settings.on_url = on_url;
+                        settings.on_url_complete = on_url_complete;
                         settings.on_header_field = on_header_field;
+                        settings.on_header_field_complete = on_header_field_complete;
                         settings.on_header_value = on_header_value;
+                        settings.on_header_value_complete = on_header_value_complete;
                         settings.on_body = on_body;
                         settings.on_message_complete = on_message_complete;
-                        
+
                         llhttp::llhttp_init(&parser, llhttp::HTTP_REQUEST, &settings);
                         parser.data = this;
+                        
+                        // Initialize state
+                        request_complete = false;
+                        input_blocked = false;
+                        
+                        // Initialize fragment tracking
+                        fragment_count = 0;
+                        temp_storage.clear();
                     }
                     
                     // Output operation - implements output protocol
-                    inline void operator>>(future_with<req>& fut) {
+                    inline void operator>>(future_with<req_insitu>& fut) {
                         // Will resolve this future when a complete HTTP request is parsed
-                        io::promise<req> promise = manager->make_future(fut, &fut.data);
-                        // Store promise to resolve it when parsing completes
-                        pending_promise = std::move(promise);
+                        pending_promise = manager->make_future(fut, &fut.data);
+                        
+                        // If we already have a completed request waiting, resolve the promise immediately
+                        if (request_complete) {
+                            deliver_request();
+                        }
                     }
                     
-                    // Input operation - implements input protocol
-                    inline future operator<<(const std::span<char>& data) {
+                    // Input operation - implements input protocol for io::buf
+                    inline future operator<<(io::buf& data) {
                         future fut;
                         io::promise<void> promise = manager->make_future(fut);
                         
-                        // Parse received data
-                        enum llhttp::llhttp_errno err = llhttp::llhttp_execute(&parser, data.data(), data.size());
+                        // If input is blocked because a completed request is waiting to be fetched,
+                        // store the promise to resolve later and return the future
+                        if (input_blocked) {
+                            pending_input_promise = std::move(promise);
+                            return fut;
+                        }
+                        
+                        // Parse the data
+                        enum llhttp::llhttp_errno err = llhttp::llhttp_execute(
+                            &parser, 
+                            static_cast<const char*>(data.data()),
+                            data.size()
+                        );
                         
                         if (err == llhttp::HPE_OK) {
-                            // Data parsed successfully
-                            promise.resolve();
-                        } else if (err == llhttp::HPE_PAUSED) {
-                            // Request complete, callback triggered
-                            llhttp::llhttp_resume(&parser);
-                            promise.resolve();
+                            // Data parsed successfully, handle the buffer
+                            // We only keep the buffer if it's part of the result (contains string_views)
+                            if (buffer_save) {
+                                current_request.raw_buffers.push_back(std::move(data));
+                                buffer_save = false;
+                            }
+                            if (request_complete == true) {
+                                // If there's no pending output to take this request, block further input
+                                if (!pending_promise.valid()) {
+                                    input_blocked = true;
+                                    pending_input_promise = std::move(promise);
+                                }
+                                else {
+                                    // There is an output waiting, deliver the request
+                                    deliver_request();
+									llhttp::llhttp_reset(&parser);
+                                    //llhttp::llhttp_resume(&parser);
+                                    promise.resolve();
+                                }
+                            }
+                            else
+                            {
+                                promise.resolve();
+                            }
                         } else {
                             // Parsing error
                             promise.reject(std::make_error_code(std::errc::protocol_error));
@@ -273,13 +635,115 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                     }
                     
                     IO_MANAGER_BAN_COPY(req_parser);
+                    // Add explicit move constructor and move assignment operator
+                    req_parser(req_parser&& other) noexcept 
+                        : pending_promise(std::move(other.pending_promise))
+                        , pending_input_promise(std::move(other.pending_input_promise))
+                        , manager(other.manager)
+                        , current_request(std::move(other.current_request))
+                        , buffer_save(other.buffer_save)
+                        , temp_string_view(other.temp_string_view)
+                        , temp_string_view_header(other.temp_string_view_header)
+                        , fragment_count(other.fragment_count)
+                        , temp_storage(std::move(other.temp_storage))
+                        , saved_buffer(std::move(other.saved_buffer))
+                        , request_complete(other.request_complete)
+                        , input_blocked(other.input_blocked)
+                    {
+                        // Re-initialize settings and parser to avoid sharing parser state
+                        llhttp::llhttp_settings_init(&settings);
+                        
+                        // Set callback functions
+                        settings.on_message_begin = on_message_begin;
+                        settings.on_url = on_url;
+                        settings.on_url_complete = on_url_complete;
+                        settings.on_header_field = on_header_field;
+                        settings.on_header_field_complete = on_header_field_complete;
+                        settings.on_header_value = on_header_value;
+                        settings.on_header_value_complete = on_header_value_complete;
+                        settings.on_body = on_body;
+                        settings.on_message_complete = on_message_complete;
+
+                        // Initialize a new parser instance
+                        llhttp::llhttp_init(&parser, llhttp::HTTP_REQUEST, &settings);
+                        parser.data = this;
+                    }
+
+                    req_parser& operator=(req_parser&& other) noexcept {
+                        if (this != &other) {
+                            pending_promise = std::move(other.pending_promise);
+                            pending_input_promise = std::move(other.pending_input_promise);
+                            manager = other.manager;
+                            current_request = std::move(other.current_request);
+                            buffer_save = other.buffer_save;
+                            temp_string_view = other.temp_string_view;
+                            temp_string_view_header = other.temp_string_view_header;
+                            fragment_count = other.fragment_count;
+                            temp_storage = std::move(other.temp_storage);
+                            saved_buffer = std::move(other.saved_buffer);
+                            request_complete = other.request_complete;
+                            input_blocked = other.input_blocked;
+                            
+                            // Re-initialize settings and parser to avoid sharing parser state
+                            llhttp::llhttp_settings_init(&settings);
+                            
+                            // Set callback functions
+                            settings.on_message_begin = on_message_begin;
+                            settings.on_url = on_url;
+                            settings.on_url_complete = on_url_complete;
+                            settings.on_header_field = on_header_field;
+                            settings.on_header_field_complete = on_header_field_complete;
+                            settings.on_header_value = on_header_value;
+                            settings.on_header_value_complete = on_header_value_complete;
+                            settings.on_body = on_body;
+                            settings.on_message_complete = on_message_complete;
+
+                            // Initialize a new parser instance
+                            llhttp::llhttp_init(&parser, llhttp::HTTP_REQUEST, &settings);
+                            parser.data = this;
+                        }
+                        return *this;
+                    }
                 private:
-                    io::promise<req> pending_promise;
-                    
+                    io::promise<req_insitu> pending_promise;
+                    io::promise<void> pending_input_promise;  // For blocked input operations
+
+                    llhttp::llhttp_settings_t settings;
                     llhttp::llhttp_t parser;
                     io::manager* manager;
-                    req current_request;
-                    std::string current_header_field;
+                    req_insitu current_request;
+                    
+                    bool buffer_save = false;
+                    
+                    // Simplified fragment handling - we only process one fragment type at a time
+                    std::string_view temp_string_view;
+                    std::string_view temp_string_view_header;
+                    int fragment_count = 0;
+                    std::string temp_storage;  // Unified temporary storage for fragments
+                    io::buf saved_buffer;      // Buffer that contains the first fragment
+                    
+                    // State tracking
+                    bool request_complete;  // Indicates if a complete request is waiting
+                    bool input_blocked;     // Indicates if input is blocked waiting for output
+                    
+                    // Deliver the completed request to the pending output, if any
+                    void deliver_request() {
+                        if (pending_promise.valid() && request_complete) {
+                            *pending_promise.data() = std::move(current_request);
+                            current_request = {};
+                            pending_promise.resolve_later();
+                            
+                            // Reset the parser and state for the next request
+                            llhttp::llhttp_resume(&parser);
+                            request_complete = false;
+                            
+                            // If there was a blocked input operation, unblock it
+                            if (input_blocked && pending_input_promise.valid()) {
+                                input_blocked = false;
+                                pending_input_promise.resolve_later();
+                            }
+                        }
+                    }
                     
                     // Callback functions for llhttp
                     static int on_message_begin(llhttp::llhttp_t* parser) {
@@ -287,7 +751,18 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                         if (!self) return 0;
                         
                         // Reset current request
-                        self->current_request = req{};
+                        self->current_request = req_insitu{};
+                        
+                        // Reset fragment tracking
+                        self->fragment_count = 0;
+                        self->temp_storage.clear();
+                        self->temp_string_view = {};
+                        self->temp_string_view_header = {};
+                        self->saved_buffer = {};
+                        
+                        // Reset buffer tracking
+                        self->buffer_save = false;
+                        
                         return 0;
                     }
                     
@@ -295,24 +770,141 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                         auto* self = static_cast<req_parser*>(parser->data);
                         if (!self) return 0;
                         
-                        self->current_request.url.append(at, length);
+                        self->fragment_count++;
+                        
+                        if (self->fragment_count == 1) {
+                            self->temp_string_view = std::string_view(at, length);
+                            self->buffer_save = true;
+                        } else if (self->fragment_count == 2) {
+                            self->temp_storage = std::string(self->temp_string_view);
+                            self->temp_storage.append(at, length);
+                            self->buffer_save = false;
+                        } else {
+                            self->temp_storage.append(at, length);
+                            self->buffer_save = false;
+                        }
+                        
+                        return 0;
+                    }
+                    
+                    static int on_url_complete(llhttp::llhttp_t* parser) {
+                        auto* self = static_cast<req_parser*>(parser->data);
+                        if (!self) return 0;
+                        
+                        if (self->fragment_count > 1) {
+                            io::buf url_buf(std::span(self->temp_storage.data(), self->temp_storage.size()));
+                            
+                            self->current_request.url = std::string_view(
+                                static_cast<const char*>(url_buf.data()), 
+                                self->temp_storage.size()
+                            );
+                            
+                            self->current_request.raw_buffers.push_back(std::move(url_buf));
+                        }
+                        else
+                        {
+							self->current_request.url = self->temp_string_view;
+                        }
+                        
+                        self->fragment_count = 0;
+                        self->temp_storage.clear();
+                        
                         return 0;
                     }
                     
                     static int on_header_field(llhttp::llhttp_t* parser, const char* at, size_t length) {
                         auto* self = static_cast<req_parser*>(parser->data);
                         if (!self) return 0;
-                        
-                        self->current_header_field.append(at, length);
+
+                        self->fragment_count++;
+
+                        if (self->fragment_count == 1) {
+                            self->temp_string_view = std::string_view(at, length);
+                            self->buffer_save = true;
+                        }
+                        else if (self->fragment_count == 2) {
+                            self->temp_storage = std::string(self->temp_string_view);
+                            self->temp_storage.append(at, length);
+                            self->buffer_save = false;
+                        }
+                        else {
+                            self->temp_storage.append(at, length);
+                            self->buffer_save = false;
+                        }
+
+                        return 0;
+                    }
+                    
+                    static int on_header_field_complete(llhttp::llhttp_t* parser) {
+                        auto* self = static_cast<req_parser*>(parser->data);
+                        if (!self) return 0;
+
+                        if (self->fragment_count > 1) {
+                            io::buf url_buf(std::span(self->temp_storage.data(), self->temp_storage.size()));
+
+                            self->temp_string_view_header = std::string_view(
+                                static_cast<const char*>(url_buf.data()),
+                                self->temp_storage.size()
+                            );
+
+                            self->current_request.raw_buffers.push_back(std::move(url_buf));
+                        }
+                        else
+                        {
+                            self->temp_string_view_header = self->temp_string_view;
+                        }
+
+                        self->fragment_count = 0;
+                        self->temp_storage.clear();
+
                         return 0;
                     }
                     
                     static int on_header_value(llhttp::llhttp_t* parser, const char* at, size_t length) {
                         auto* self = static_cast<req_parser*>(parser->data);
                         if (!self) return 0;
-                        
-                        self->current_request.headers[self->current_header_field].append(at, length);
-                        self->current_header_field.clear();
+
+                        self->fragment_count++;
+
+                        if (self->fragment_count == 1) {
+                            self->temp_string_view = std::string_view(at, length);
+                            self->buffer_save = true;
+                        }
+                        else if (self->fragment_count == 2) {
+                            self->temp_storage = std::string(self->temp_string_view);
+                            self->temp_storage.append(at, length);
+                            self->buffer_save = false;
+                        }
+                        else {
+                            self->temp_storage.append(at, length);
+                            self->buffer_save = false;
+                        }
+
+                        return 0;
+                    }
+                    
+                    static int on_header_value_complete(llhttp::llhttp_t* parser) {
+                        auto* self = static_cast<req_parser*>(parser->data);
+                        if (!self) return 0;
+
+                        if (self->fragment_count > 1) {
+                            io::buf url_buf(std::span(self->temp_storage.data(), self->temp_storage.size()));
+
+							self->current_request.headers[self->temp_string_view_header] = std::string_view(
+								static_cast<const char*>(url_buf.data()),
+								self->temp_storage.size()
+							);
+
+                            self->current_request.raw_buffers.push_back(std::move(url_buf));
+                        }
+                        else
+                        {
+							self->current_request.headers[self->temp_string_view_header] = self->temp_string_view;
+                        }
+
+                        self->fragment_count = 0;
+                        self->temp_storage.clear();
+
                         return 0;
                     }
                     
@@ -320,7 +912,9 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                         auto* self = static_cast<req_parser*>(parser->data);
                         if (!self) return 0;
                         
-                        self->current_request.body.append(at, length);
+                        self->current_request.body_fragments.emplace_back(at, length);
+                        self->buffer_save = true;
+                        
                         return 0;
                     }
                     
@@ -328,149 +922,573 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                         auto* self = static_cast<req_parser*>(parser->data);
                         if (!self) return 0;
                         
-                        // Set method and version
                         self->current_request.method = static_cast<llhttp::llhttp_method_t>(parser->method);
                         self->current_request.major_version = parser->http_major;
                         self->current_request.minor_version = parser->http_minor;
                         
-                        // Resolve the promise with the completed request
-                        if (self->pending_promise.valid()) {
-                            *self->pending_promise.data() = self->current_request;
-                            self->pending_promise.resolve();
-                        }
+                        self->request_complete = true;
                         
-                        // Pause parser to prevent further processing until next input
-                        llhttp::llhttp_pause(parser);
                         return 0;
                     }
                 };
-                
-                struct rsp_parser{
-                    __IO_INTERNAL_HEADER_PERMISSION;
-                    using prot_output_type = rsp;
-                    
+
+                // HTTP response parser - parses io::buf into rsp_insitu
+                struct rsp_parser
+                {
+                    using prot_output_type = rsp_insitu;
+
                     template <typename T_FSM>
-                    inline rsp_parser(fsm<T_FSM>& state_machine) : manager(state_machine.getManager()) {
-                        llhttp::llhttp_settings_t settings;
+                    inline rsp_parser(fsm<T_FSM> &state_machine) : manager(state_machine.getManager())
+                    {
+                        llhttp::llhttp_settings_init(&settings);
+
+                        // Set callback functions
+                        settings.on_message_begin = on_message_begin;
+                        settings.on_status = on_status;
+                        settings.on_status_complete = on_status_complete;
+                        settings.on_header_field = on_header_field;
+                        settings.on_header_field_complete = on_header_field_complete;
+                        settings.on_header_value = on_header_value;
+                        settings.on_header_value_complete = on_header_value_complete;
+                        settings.on_body = on_body;
+                        settings.on_message_complete = on_message_complete;
+
+                        llhttp::llhttp_init(&parser, llhttp::HTTP_RESPONSE, &settings);
+                        parser.data = this;
+
+                        // Initialize state
+                        response_complete = false;
+                        input_blocked = false;
+
+                        // Initialize fragment tracking
+                        fragment_count = 0;
+                        temp_storage.clear();
+                    }
+
+                    // Output operation - implements output protocol
+                    inline void operator>>(future_with<rsp_insitu> &fut)
+                    {
+                        // Will resolve this future when a complete HTTP response is parsed
+                        pending_promise = manager->make_future(fut, &fut.data);
+
+                        // If we already have a completed response waiting, resolve the promise immediately
+                        if (response_complete)
+                        {
+                            deliver_response();
+                        }
+                    }
+
+                    // Input operation - implements input protocol for io::buf
+                    inline future operator<<(io::buf &data)
+                    {
+                        future fut;
+                        io::promise<void> promise = manager->make_future(fut);
+
+                        // If input is blocked because a completed response is waiting to be fetched,
+                        // store the promise to resolve later and return the future
+                        if (input_blocked)
+                        {
+                            pending_input_promise = std::move(promise);
+                            return fut;
+                        }
+
+                        // Parse the data
+                        enum llhttp::llhttp_errno err = llhttp::llhttp_execute(
+                            &parser,
+                            static_cast<const char *>(data.data()),
+                            data.size());
+
+                        if (err == llhttp::HPE_OK)
+                        {
+                            // Data parsed successfully, handle the buffer
+                            // We only keep the buffer if it's part of the result (contains string_views)
+                            if (buffer_save)
+                            {
+                                current_response.raw_buffers.push_back(std::move(data));
+                                buffer_save = false;
+                            }
+                            if (response_complete == true)
+                            {
+                                // If there's no pending output to take this response, block further input
+                                if (!pending_promise.valid())
+                                {
+                                    input_blocked = true;
+                                    pending_input_promise = std::move(promise);
+                                }
+                                else
+                                {
+                                    // There is an output waiting, deliver the response
+                                    deliver_response();
+                                    llhttp::llhttp_reset(&parser);
+                                    // llhttp::llhttp_resume(&parser);
+                                    promise.resolve();
+                                }
+                            }
+                            else
+                            {
+                                promise.resolve();
+                            }
+                        }
+                        else
+                        {
+                            // Parsing error
+                            promise.reject(std::make_error_code(std::errc::protocol_error));
+                        }
+
+                        return fut;
+                    }
+
+                    IO_MANAGER_BAN_COPY(rsp_parser);
+                    // Add explicit move constructor and move assignment operator
+                    rsp_parser(rsp_parser&& other) noexcept 
+                        : pending_promise(std::move(other.pending_promise))
+                        , pending_input_promise(std::move(other.pending_input_promise))
+                        , manager(other.manager)
+                        , current_response(std::move(other.current_response))
+                        , buffer_save(other.buffer_save)
+                        , temp_string_view(other.temp_string_view)
+                        , temp_string_view_header(other.temp_string_view_header)
+                        , fragment_count(other.fragment_count)
+                        , temp_storage(std::move(other.temp_storage))
+                        , saved_buffer(std::move(other.saved_buffer))
+                        , response_complete(other.response_complete)
+                        , input_blocked(other.input_blocked)
+                    {
+                        // Re-initialize settings and parser to avoid sharing parser state
                         llhttp::llhttp_settings_init(&settings);
                         
                         // Set callback functions
                         settings.on_message_begin = on_message_begin;
                         settings.on_status = on_status;
+                        settings.on_status_complete = on_status_complete;
                         settings.on_header_field = on_header_field;
+                        settings.on_header_field_complete = on_header_field_complete;
                         settings.on_header_value = on_header_value;
+                        settings.on_header_value_complete = on_header_value_complete;
                         settings.on_body = on_body;
                         settings.on_message_complete = on_message_complete;
-                        
+
+                        // Initialize a new parser instance
                         llhttp::llhttp_init(&parser, llhttp::HTTP_RESPONSE, &settings);
                         parser.data = this;
                     }
-                    
-                    // Output operation - implements output protocol
-                    inline void operator>>(future_with<rsp>& fut) {
-                        // Will resolve this future when a complete HTTP response is parsed
-                        io::promise<rsp> promise = manager->make_future(fut, &fut.data);
-                        // Store promise to resolve it when parsing completes
-                        pending_promise = std::move(promise);
-                    }
-                    
-                    // Input operation - implements input protocol
-                    inline future operator<<(const std::span<char>& data) {
-                        future fut;
-                        io::promise<void> promise = manager->make_future(fut);
-                        
-                        // Parse received data
-                        enum llhttp::llhttp_errno err = llhttp::llhttp_execute(&parser, data.data(), data.size());
-                        
-                        if (err == llhttp::HPE_OK) {
-                            // Data parsed successfully
-                            promise.resolve();
-                        } else if (err == llhttp::HPE_PAUSED) {
-                            // Response complete, callback triggered
-                            llhttp::llhttp_resume(&parser);
-                            promise.resolve();
-                        } else {
-                            // Parsing error
-                            promise.reject(std::make_error_code(std::errc::protocol_error));
+
+                    rsp_parser& operator=(rsp_parser&& other) noexcept {
+                        if (this != &other) {
+                            pending_promise = std::move(other.pending_promise);
+                            pending_input_promise = std::move(other.pending_input_promise);
+                            manager = other.manager;
+                            current_response = std::move(other.current_response);
+                            buffer_save = other.buffer_save;
+                            temp_string_view = other.temp_string_view;
+                            temp_string_view_header = other.temp_string_view_header;
+                            fragment_count = other.fragment_count;
+                            temp_storage = std::move(other.temp_storage);
+                            saved_buffer = std::move(other.saved_buffer);
+                            response_complete = other.response_complete;
+                            input_blocked = other.input_blocked;
+                            
+                            // Re-initialize settings and parser to avoid sharing parser state
+                            llhttp::llhttp_settings_init(&settings);
+                            
+                            // Set callback functions
+                            settings.on_message_begin = on_message_begin;
+                            settings.on_status = on_status;
+                            settings.on_status_complete = on_status_complete;
+                            settings.on_header_field = on_header_field;
+                            settings.on_header_field_complete = on_header_field_complete;
+                            settings.on_header_value = on_header_value;
+                            settings.on_header_value_complete = on_header_value_complete;
+                            settings.on_body = on_body;
+                            settings.on_message_complete = on_message_complete;
+
+                            // Initialize a new parser instance
+                            llhttp::llhttp_init(&parser, llhttp::HTTP_RESPONSE, &settings);
+                            parser.data = this;
                         }
-                        
-                        return fut;
+                        return *this;
+                    }
+                private:
+                    io::promise<rsp_insitu> pending_promise;
+                    io::promise<void> pending_input_promise; // For blocked input operations
+
+                    llhttp::llhttp_settings_t settings;
+                    llhttp::llhttp_t parser;
+                    io::manager *manager;
+                    rsp_insitu current_response;
+
+                    bool buffer_save = false;
+
+                    // Simplified fragment handling - we only process one fragment type at a time
+                    std::string_view temp_string_view;
+                    std::string_view temp_string_view_header;
+                    int fragment_count = 0;
+                    std::string temp_storage; // Unified temporary storage for fragments
+                    io::buf saved_buffer;     // Buffer that contains the first fragment
+
+                    // State tracking
+                    bool response_complete; // Indicates if a complete response is waiting
+                    bool input_blocked;     // Indicates if input is blocked waiting for output
+
+                    // Deliver the completed response to the pending output, if any
+                    void deliver_response()
+                    {
+                        if (pending_promise.valid() && response_complete)
+                        {
+                            *pending_promise.data() = std::move(current_response);
+                            current_response = {};
+                            pending_promise.resolve_later();
+
+                            // Reset the parser and state for the next response
+                            llhttp::llhttp_resume(&parser);
+                            response_complete = false;
+
+                            // If there was a blocked input operation, unblock it
+                            if (input_blocked && pending_input_promise.valid())
+                            {
+                                input_blocked = false;
+                                pending_input_promise.resolve_later();
+                            }
+                        }
                     }
 
-                    IO_MANAGER_BAN_COPY(rsp_parser);
-                private:
-                    io::promise<rsp> pending_promise;
-                    
-                    llhttp::llhttp_t parser;
-                    io::manager* manager;
-                    rsp current_response;
-                    std::string current_header_field;
-                    
                     // Callback functions for llhttp
-                    static int on_message_begin(llhttp::llhttp_t* parser) {
-                        auto* self = static_cast<rsp_parser*>(parser->data);
-                        if (!self) return 0;
-                        
+                    static int on_message_begin(llhttp::llhttp_t *parser)
+                    {
+                        auto *self = static_cast<rsp_parser *>(parser->data);
+                        if (!self)
+                            return 0;
+
                         // Reset current response
-                        self->current_response = rsp{};
+                        self->current_response = rsp_insitu{};
+
+                        // Reset fragment tracking
+                        self->fragment_count = 0;
+                        self->temp_storage.clear();
+                        self->temp_string_view = {};
+                        self->temp_string_view_header = {};
+                        self->saved_buffer = {};
+
+                        // Reset buffer tracking
+                        self->buffer_save = false;
+
                         return 0;
                     }
-                    
-                    static int on_status(llhttp::llhttp_t* parser, const char* at, size_t length) {
-                        auto* self = static_cast<rsp_parser*>(parser->data);
-                        if (!self) return 0;
-                        
-                        self->current_response.status_message.append(at, length);
+
+                    static int on_status(llhttp::llhttp_t *parser, const char *at, size_t length)
+                    {
+                        auto *self = static_cast<rsp_parser *>(parser->data);
+                        if (!self)
+                            return 0;
+
+                        self->fragment_count++;
+
+                        if (self->fragment_count == 1)
+                        {
+                            self->temp_string_view = std::string_view(at, length);
+                            self->buffer_save = true;
+                        }
+                        else if (self->fragment_count == 2)
+                        {
+                            self->temp_storage = std::string(self->temp_string_view);
+                            self->temp_storage.append(at, length);
+                            self->buffer_save = false;
+                        }
+                        else
+                        {
+                            self->temp_storage.append(at, length);
+                            self->buffer_save = false;
+                        }
+
                         return 0;
                     }
-                    
-                    static int on_header_field(llhttp::llhttp_t* parser, const char* at, size_t length) {
-                        auto* self = static_cast<rsp_parser*>(parser->data);
-                        if (!self) return 0;
-                        
-                        self->current_header_field.append(at, length);
+
+                    static int on_status_complete(llhttp::llhttp_t *parser)
+                    {
+                        auto *self = static_cast<rsp_parser *>(parser->data);
+                        if (!self)
+                            return 0;
+
+                        if (self->fragment_count > 1)
+                        {
+                            io::buf status_buf(std::span(self->temp_storage.data(), self->temp_storage.size()));
+
+                            self->current_response.status_message = std::string_view(
+                                static_cast<const char *>(status_buf.data()),
+                                self->temp_storage.size());
+
+                            self->current_response.raw_buffers.push_back(std::move(status_buf));
+                        }
+                        else
+                        {
+                            self->current_response.status_message = self->temp_string_view;
+                        }
+
+                        self->fragment_count = 0;
+                        self->temp_storage.clear();
+
                         return 0;
                     }
-                    
-                    static int on_header_value(llhttp::llhttp_t* parser, const char* at, size_t length) {
-                        auto* self = static_cast<rsp_parser*>(parser->data);
-                        if (!self) return 0;
-                        
-                        self->current_response.headers[self->current_header_field].append(at, length);
-                        self->current_header_field.clear();
+
+                    static int on_header_field(llhttp::llhttp_t *parser, const char *at, size_t length)
+                    {
+                        auto *self = static_cast<rsp_parser *>(parser->data);
+                        if (!self)
+                            return 0;
+
+                        self->fragment_count++;
+
+                        if (self->fragment_count == 1)
+                        {
+                            self->temp_string_view = std::string_view(at, length);
+                            self->buffer_save = true;
+                        }
+                        else if (self->fragment_count == 2)
+                        {
+                            self->temp_storage = std::string(self->temp_string_view);
+                            self->temp_storage.append(at, length);
+                            self->buffer_save = false;
+                        }
+                        else
+                        {
+                            self->temp_storage.append(at, length);
+                            self->buffer_save = false;
+                        }
+
                         return 0;
                     }
-                    
-                    static int on_body(llhttp::llhttp_t* parser, const char* at, size_t length) {
-                        auto* self = static_cast<rsp_parser*>(parser->data);
-                        if (!self) return 0;
-                        
-                        self->current_response.body.append(at, length);
+
+                    static int on_header_field_complete(llhttp::llhttp_t *parser)
+                    {
+                        auto *self = static_cast<rsp_parser *>(parser->data);
+                        if (!self)
+                            return 0;
+
+                        if (self->fragment_count > 1)
+                        {
+                            io::buf header_buf(std::span(self->temp_storage.data(), self->temp_storage.size()));
+
+                            self->temp_string_view_header = std::string_view(
+                                static_cast<const char *>(header_buf.data()),
+                                self->temp_storage.size());
+
+                            self->current_response.raw_buffers.push_back(std::move(header_buf));
+                        }
+                        else
+                        {
+                            self->temp_string_view_header = self->temp_string_view;
+                        }
+
+                        self->fragment_count = 0;
+                        self->temp_storage.clear();
+
                         return 0;
                     }
-                    
-                    static int on_message_complete(llhttp::llhttp_t* parser) {
-                        auto* self = static_cast<rsp_parser*>(parser->data);
-                        if (!self) return 0;
-                        
-                        // Set status code and version
+
+                    static int on_header_value(llhttp::llhttp_t *parser, const char *at, size_t length)
+                    {
+                        auto *self = static_cast<rsp_parser *>(parser->data);
+                        if (!self)
+                            return 0;
+
+                        self->fragment_count++;
+
+                        if (self->fragment_count == 1)
+                        {
+                            self->temp_string_view = std::string_view(at, length);
+                            self->buffer_save = true;
+                        }
+                        else if (self->fragment_count == 2)
+                        {
+                            self->temp_storage = std::string(self->temp_string_view);
+                            self->temp_storage.append(at, length);
+                            self->buffer_save = false;
+                        }
+                        else
+                        {
+                            self->temp_storage.append(at, length);
+                            self->buffer_save = false;
+                        }
+
+                        return 0;
+                    }
+
+                    static int on_header_value_complete(llhttp::llhttp_t *parser)
+                    {
+                        auto *self = static_cast<rsp_parser *>(parser->data);
+                        if (!self)
+                            return 0;
+
+                        if (self->fragment_count > 1)
+                        {
+                            io::buf header_value_buf(std::span(self->temp_storage.data(), self->temp_storage.size()));
+
+                            self->current_response.headers[self->temp_string_view_header] = std::string_view(
+                                static_cast<const char *>(header_value_buf.data()),
+                                self->temp_storage.size());
+
+                            self->current_response.raw_buffers.push_back(std::move(header_value_buf));
+                        }
+                        else
+                        {
+                            self->current_response.headers[self->temp_string_view_header] = self->temp_string_view;
+                        }
+
+                        self->fragment_count = 0;
+                        self->temp_storage.clear();
+
+                        return 0;
+                    }
+
+                    static int on_body(llhttp::llhttp_t *parser, const char *at, size_t length)
+                    {
+                        auto *self = static_cast<rsp_parser *>(parser->data);
+                        if (!self)
+                            return 0;
+
+                        self->current_response.body_fragments.emplace_back(at, length);
+                        self->buffer_save = true;
+
+                        return 0;
+                    }
+
+                    static int on_message_complete(llhttp::llhttp_t *parser)
+                    {
+                        auto *self = static_cast<rsp_parser *>(parser->data);
+                        if (!self)
+                            return 0;
+
+                        // Status code is already set by llhttp
                         self->current_response.status_code = parser->status_code;
                         self->current_response.major_version = parser->http_major;
                         self->current_response.minor_version = parser->http_minor;
-                        
-                        // Resolve the promise with the completed response
-                        if (self->pending_promise.valid()) {
-                            *self->pending_promise.data() = self->current_response;
-                            self->pending_promise.resolve();
-                        }
-                        
-                        // Pause parser to prevent further processing until next input
-                        llhttp::llhttp_pause(parser);
+
+                        self->response_complete = true;
+
                         return 0;
                     }
                 };
 
+                // Unified HTTP serializer - serializes any HTTP message type into io::buf to send
+                struct serializer {
+                    using prot_output_type = io::buf;
+                    
+                    template <typename T_FSM>
+                    inline serializer(fsm<T_FSM>& state_machine) : manager(state_machine.getManager()) {}
+                    
+                    // Output operation - implements output protocol
+                    inline void operator>>(future_with<io::buf>& fut) {
+                        // Will resolve this future when we have a buffer to send
+                        pending_promise = manager->make_future(fut, &fut.data);
+                        deliver_buffer();
+                    }
+                    
+                    // Input operations for request types
+                    inline future operator<<(req& request) {
+                        future fut;
+                        pending_input_promise = manager->make_future(fut);
 
+                        // Check if previous output has been sent
+                        if (buffers.size()) {
+                            return fut;
+                        }
+                        
+                        // Serialize string-based request to a single buffer
+                        io::buf combined_buffer = request.serialize();
+                        buffers.push_back(std::move(combined_buffer));
+
+                        deliver_buffer();
+                        return fut;
+                    }
+                    
+                    inline future operator<<(req_insitu& request) {
+                        future fut;
+                        pending_input_promise = manager->make_future(fut);
+                        
+                        // Check if previous output has been sent
+                        if (buffers.size()) {
+                            return fut;
+                        }
+                        
+                        // For in-situ request, we can reuse existing buffers for better performance
+                        if (!request.raw_buffers.empty()) {
+                            // Move raw buffers from request to our buffer queue
+                            for (auto& buf : request.raw_buffers) {
+                                buffers.push_back(std::move(buf));
+                            }
+                        }
+
+                        deliver_buffer();
+                        return fut;
+                    }
+                    
+                    // Input operations for response types
+                    inline future operator<<(rsp& response) {
+                        future fut;
+                        pending_input_promise = manager->make_future(fut);
+                        
+                        // Check if previous output has been sent
+                        if (buffers.size()) {
+                            return fut;
+                        }
+                        
+                        // Serialize string-based response to a single buffer
+                        io::buf combined_buffer = response.serialize();
+                        buffers.push_back(std::move(combined_buffer));
+
+                        deliver_buffer();
+                        return fut;
+                    }
+                    
+                    inline future operator<<(rsp_insitu& response) {
+                        future fut;
+                        pending_input_promise = manager->make_future(fut);
+
+                        // Check if previous output has been sent
+                        if (buffers.size()) {
+                            return fut;
+                        }
+                        
+                        // For in-situ response, we can reuse existing buffers for better performance
+                        if (!response.raw_buffers.empty()) {
+                            // Move raw buffers from response to our buffer queue
+                            for (auto& buf : response.raw_buffers) {
+                                buffers.push_back(std::move(buf));
+                            }
+                        }
+
+                        deliver_buffer();
+                        return fut;
+                    }
+                    
+                    serializer(serializer&) = delete;
+                    serializer& operator=(serializer&) = delete;
+
+                    serializer(serializer&&) = default;
+                    serializer& operator=(serializer&&) = default;
+                private:
+                    io::promise<io::buf> pending_promise;
+                    io::promise<void> pending_input_promise;  // For blocked input operations
+                    io::manager* manager;
+                    
+                    std::vector<io::buf> buffers;  // Queue of buffers to send
+                    
+                    // Deliver the next buffer to the pending output, if any
+                    void deliver_buffer() {
+                        if (pending_promise.valid() && !buffers.empty()) {
+                            // Move the first buffer to the promise
+                            *pending_promise.data() = std::move(*(buffers.end() - 1));
+                            buffers.pop_back();
+                            
+                            pending_promise.resolve_later();
+                            
+                            // If the buffer queue is empty, reset the output state
+                            if (buffers.empty()) {
+                                pending_input_promise.resolve_later();
+                            }
+                        }
+                    }
+                };
             };
         };
     };
