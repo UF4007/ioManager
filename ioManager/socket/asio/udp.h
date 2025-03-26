@@ -23,39 +23,6 @@ namespace io
                         return;
                     }
 
-                    //// Get receive buffer size
-                    //std::error_code ec;
-                    //asio::socket_base::receive_buffer_size option;
-                    //asio_sock.get_option(option, ec);
-                    //size_t buf_size = ec ? 65536 : option.value(); // Use 64KB default if get_option fails
-
-                    //io::buf read_buf;
-                    //if (this->buffer)
-                    //{
-                    //    read_buf = std::move(this->buffer);
-                    //}
-                    //else
-                    //{
-                    //    read_buf = io::buf(buf_size);
-                    //}
-
-                    //asio_sock.async_receive_from(
-                    //    asio::buffer(read_buf.unused_span().data(), read_buf.unused_span().size()), 
-                    //    remote_endpoint,
-                    //    [this, read_buf = std::move(read_buf), prom = std::move(prom)]
-                    //    (const std::error_code& ec, size_t bytes_read) mutable {
-                    //        if (ec) {
-                    //            prom.reject_later(ec);
-                    //            return;
-                    //        }
-
-                    //        read_buf.size_increase(bytes_read);
-                    //        auto ptr = prom.resolve_later();
-                    //        if (ptr) {
-                    //            *ptr = std::make_pair(std::move(read_buf), remote_endpoint);
-                    //        }
-                    //    });
-
                     asio_sock.async_wait(asio::ip::tcp::socket::wait_read,
                         [this, prom = std::move(prom)](const std::error_code& ec) mutable {
                             if (ec) {
@@ -63,15 +30,15 @@ namespace io
                                 return;
                             }
 
-                            std::error_code read_ec;
-                            if (asio_sock.available(read_ec) == 0) {
-                                prom.reject_later(std::make_error_code(std::errc::connection_aborted));
-                                return;
-                            }
-
-                            auto ptr = prom.resolve_later();
+                            auto ptr = prom.data();
                             if (ptr)
                             {
+                                std::error_code read_ec;
+                                if (asio_sock.available(read_ec) == 0) {
+                                    prom.reject_later(std::make_error_code(std::errc::connection_aborted));
+                                    return;
+                                }
+
                                 asio::ip::udp::endpoint end;
                                 io::buf read_buf;
                                 if (this->buffer)
@@ -89,6 +56,7 @@ namespace io
                                     return;
                                 }
 
+                                prom.resolve_later();
                                 *ptr = std::make_pair(std::move(read_buf), end);
                             }
                         });

@@ -718,6 +718,19 @@ This test evaluates the ability to establish and maintain a large number of conc
 
 The system successfully established 10,000 concurrent connections at a rate of over 3,000 connections per second. When attempting to reach 100,000 connections, the system reached approximately 64,000 connections, which is the practical limit due to the available ephemeral port range on a single loopback IP address.
 
+### HTTP Server Performance Test
+
+This test evaluates the performance of the minimal HTTP RPC server implementation in the library.
+
+| Test Scenario | Configuration | Requests/sec | Avg Latency | Transfer/sec |
+|---------------|--------------|--------------|-------------|--------------|
+| High Concurrency | 12 threads, 10,000 connections, 30s | 23,064.67 | 31.57ms | 3.72MB |
+| Moderate Load | 2 threads, 100 connections, 10s | 25,665.37 | 3.55ms | 4.14MB |
+
+*The HTTP server implementation can be found in `demo.h` in the `coro_http_rpc_demo()` function.*
+
+These results demonstrate excellent HTTP server performance, with the ability to handle over 23,000 requests per second even under extremely high load (10,000 concurrent connections). Under moderate load (100 connections), latency drops significantly to just 3.55ms average while maintaining high throughput of over 25,000 requests per second.
+
 ## License
 
 This project is licensed under the MIT License - see the [License.txt](License.txt) file for details.

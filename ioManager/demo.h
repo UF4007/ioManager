@@ -1317,7 +1317,7 @@ io::fsm_func<void> coro_http_rpc_demo() {
                     io::future end;
 
                     auto pipeline = io::pipeline<>() >> socket >> io::prot::http::req_parser(fsm) >> [&rpc](io::prot::http::req_insitu& req)->std::optional<io::prot::http::rsp> {
-						std::cout << "Received request: " << req.method_name() << " " << req.url << std::endl;
+						//std::cout << "Received request: " << req.method_name() << " " << req.url << std::endl;
                         io::prot::http::rsp rsp = rpc(req.url, req);
 						
                         rsp.status_code = 200;
@@ -1337,7 +1337,7 @@ io::fsm_func<void> coro_http_rpc_demo() {
                     auto started_pipeline = std::move(pipeline).spawn(fsm,
                         [prom = fsm.make_future(end)](int which, bool output_or_input, std::error_code ec) mutable {
                             prom.resolve_later();
-                            std::cout << "eof" << std::endl;
+                            //std::cout << "eof" << std::endl;
                         }
                     );
                     co_await end;

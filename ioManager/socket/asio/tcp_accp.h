@@ -48,17 +48,16 @@ namespace io
                                 return;
                             }
 
-                            // Set the accepted socket to non-blocking
-                            std::error_code nb_ec;
-                            sock.non_blocking(true, nb_ec);
-                            if (nb_ec) {
-                                prom.reject_later(nb_ec);
-                                return;
-                            }
-
-                            auto ptr = prom.resolve_later();
+                            auto ptr = prom.data();
                             if (ptr)
                             {
+                                std::error_code nb_ec;
+                                sock.non_blocking(true, nb_ec);
+                                if (nb_ec) {
+                                    prom.reject_later(nb_ec);
+                                    return;
+                                }
+                                prom.resolve_later();
                                 ptr->emplace(std::move(sock), manager);
                             }
                             else

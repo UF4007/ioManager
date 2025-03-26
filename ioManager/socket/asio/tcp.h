@@ -29,31 +29,32 @@ namespace io
                                 return;
                             }
 
-                            std::error_code read_ec;
-                            if (asio_sock.available(read_ec) == 0) {
-								prom.reject_later(std::make_error_code(std::errc::connection_aborted));
-								return;
-                            }
-
-                            io::buf read_buf;
-                            if (this->buffer)
-                            {
-                                read_buf = std::move(this->buffer);
-                            }
-                            else
-                            {
-								read_buf = io::buf(asio_sock.available());
-                            }
-                            size_t bytes_read = asio_sock.read_some(asio::buffer(read_buf.unused_span().data(), read_buf.unused_span().size()), read_ec);
-                            read_buf.size_increase(bytes_read);
-                            if (read_ec) {
-                                prom.reject_later(read_ec);
-                                return;
-                            }
-
-                            auto ptr = prom.resolve_later();
+                            auto ptr = prom.data();
                             if (ptr)
                             {
+                                std::error_code read_ec;
+                                if (asio_sock.available(read_ec) == 0) {
+                                    prom.reject_later(std::make_error_code(std::errc::connection_aborted));
+                                    return;
+                                }
+
+                                io::buf read_buf;
+                                if (this->buffer)
+                                {
+                                    read_buf = std::move(this->buffer);
+                                }
+                                else
+                                {
+                                    read_buf = io::buf(asio_sock.available());
+                                }
+                                size_t bytes_read = asio_sock.read_some(asio::buffer(read_buf.unused_span().data(), read_buf.unused_span().size()), read_ec);
+                                read_buf.size_increase(bytes_read);
+                                if (read_ec) {
+                                    prom.reject_later(read_ec);
+                                    return;
+                                }
+
+                                prom.resolve_later();
                                 *ptr = std::move(read_buf);
                             }
                         });
