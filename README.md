@@ -730,3 +730,4 @@ Contributions are welcome! Feel free to open issues or submit pull requests on G
 
 - Uses [Asio](https://think-async.com/Asio/) for network support
 - KCP protocol implementation based on [ikcp](https://github.com/skywind3000/kcp)
+- HTTP parsing powered by [llhttp](https://github.com/nodejs/llhttp)

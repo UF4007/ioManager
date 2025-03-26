@@ -701,3 +701,4 @@ GCC下的速度甚至更快，已接近原生 C++20 协程的性能。
 
 - 使用[Asio](https://think-async.com/Asio/)提供网络支持
 - KCP协议实现基于[ikcp](https://github.com/skywind3000/kcp) 
+- HTTP解析由[llhttp](https://github.com/nodejs/llhttp)提供支持 
