@@ -546,25 +546,8 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                     
                     template <typename T_FSM>
                     inline req_parser(fsm<T_FSM>& state_machine) : manager(state_machine.getManager()) {
-                        llhttp::llhttp_settings_init(&settings);
-                        
-                        // Set callback functions
-                        settings.on_message_begin = on_message_begin;
-                        settings.on_url = on_url;
-                        settings.on_url_complete = on_url_complete;
-                        settings.on_header_field = on_header_field;
-                        settings.on_header_field_complete = on_header_field_complete;
-                        settings.on_header_value = on_header_value;
-                        settings.on_header_value_complete = on_header_value_complete;
-                        settings.on_body = on_body;
-                        settings.on_message_complete = on_message_complete;
-
-                        llhttp::llhttp_init(&parser, llhttp::HTTP_REQUEST, &settings);
+                        init_parser(&parser);
                         parser.data = this;
-                        
-                        // Initialize state
-                        request_complete = false;
-                        input_blocked = false;
                         
                         // Initialize fragment tracking
                         fragment_count = 0;
@@ -573,26 +556,18 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                     
                     // Output operation - implements output protocol
                     inline void operator>>(future_with<req_insitu>& fut) {
-                        // Will resolve this future when a complete HTTP request is parsed
-                        pending_promise = manager->make_future(fut, &fut.data);
-                        
-                        // If we already have a completed request waiting, resolve the promise immediately
-                        if (request_complete) {
-                            deliver_request();
+                        current_request.send_prom = manager->make_future(fut, &fut.data);
+                        if (request_complete)
+                        {
+                            current_request.try_send();
+                            request_complete = false;
                         }
                     }
                     
                     // Input operation - implements input protocol for io::buf
                     inline future operator<<(io::buf& data) {
                         future fut;
-                        io::promise<void> promise = manager->make_future(fut);
-                        
-                        // If input is blocked because a completed request is waiting to be fetched,
-                        // store the promise to resolve later and return the future
-                        if (input_blocked) {
-                            pending_input_promise = std::move(promise);
-                            return fut;
-                        }
+                        current_request.recv_prom = manager->make_future(fut);
                         
                         // Parse the data
                         enum llhttp::llhttp_errno err = llhttp::llhttp_execute(
@@ -602,33 +577,22 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                         );
                         
                         if (err == llhttp::HPE_OK) {
-                            // Data parsed successfully, handle the buffer
-                            // We only keep the buffer if it's part of the result (contains string_views)
                             if (buffer_save) {
-                                current_request.raw_buffers.push_back(std::move(data));
+                                current_request.temp->raw_buffers.push_back(std::move(data));
                                 buffer_save = false;
                             }
                             if (request_complete == true) {
-                                // If there's no pending output to take this request, block further input
-                                if (!pending_promise.valid()) {
-                                    input_blocked = true;
-                                    pending_input_promise = std::move(promise);
-                                }
-                                else {
-                                    // There is an output waiting, deliver the request
-                                    deliver_request();
-									llhttp::llhttp_reset(&parser);
-                                    //llhttp::llhttp_resume(&parser);
-                                    promise.resolve();
+                                if (current_request.try_send()) {
+                                    llhttp::llhttp_reset(&parser);
+                                    current_request.recv_prom.resolve();
                                 }
                             }
                             else
                             {
-                                promise.resolve();
+                                current_request.recv_prom.resolve();
                             }
                         } else {
-                            // Parsing error
-                            promise.reject(std::make_error_code(std::errc::protocol_error));
+                            current_request.recv_prom.reject(std::make_error_code(std::errc::protocol_error));
                         }
                         
                         return fut;
@@ -637,42 +601,21 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                     IO_MANAGER_BAN_COPY(req_parser);
                     // Add explicit move constructor and move assignment operator
                     req_parser(req_parser&& other) noexcept 
-                        : pending_promise(std::move(other.pending_promise))
-                        , pending_input_promise(std::move(other.pending_input_promise))
-                        , manager(other.manager)
+                        : manager(other.manager)
                         , current_request(std::move(other.current_request))
                         , buffer_save(other.buffer_save)
                         , temp_string_view(other.temp_string_view)
                         , temp_string_view_header(other.temp_string_view_header)
                         , fragment_count(other.fragment_count)
                         , temp_storage(std::move(other.temp_storage))
-                        , saved_buffer(std::move(other.saved_buffer))
                         , request_complete(other.request_complete)
-                        , input_blocked(other.input_blocked)
                     {
-                        // Re-initialize settings and parser to avoid sharing parser state
-                        llhttp::llhttp_settings_init(&settings);
-                        
-                        // Set callback functions
-                        settings.on_message_begin = on_message_begin;
-                        settings.on_url = on_url;
-                        settings.on_url_complete = on_url_complete;
-                        settings.on_header_field = on_header_field;
-                        settings.on_header_field_complete = on_header_field_complete;
-                        settings.on_header_value = on_header_value;
-                        settings.on_header_value_complete = on_header_value_complete;
-                        settings.on_body = on_body;
-                        settings.on_message_complete = on_message_complete;
-
-                        // Initialize a new parser instance
-                        llhttp::llhttp_init(&parser, llhttp::HTTP_REQUEST, &settings);
+						init_parser(&parser);
                         parser.data = this;
                     }
 
                     req_parser& operator=(req_parser&& other) noexcept {
                         if (this != &other) {
-                            pending_promise = std::move(other.pending_promise);
-                            pending_input_promise = std::move(other.pending_input_promise);
                             manager = other.manager;
                             current_request = std::move(other.current_request);
                             buffer_save = other.buffer_save;
@@ -680,14 +623,31 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                             temp_string_view_header = other.temp_string_view_header;
                             fragment_count = other.fragment_count;
                             temp_storage = std::move(other.temp_storage);
-                            saved_buffer = std::move(other.saved_buffer);
                             request_complete = other.request_complete;
-                            input_blocked = other.input_blocked;
-                            
-                            // Re-initialize settings and parser to avoid sharing parser state
-                            llhttp::llhttp_settings_init(&settings);
-                            
-                            // Set callback functions
+
+                            init_parser(&parser);
+                            parser.data = this;
+                        }
+                        return *this;
+                    }
+                private:
+                    protocol_lock<req_insitu> current_request;
+
+                    llhttp::llhttp_t parser;
+                    io::manager* manager;
+                    
+                    bool buffer_save = false;
+                    
+                    std::string_view temp_string_view;
+                    std::string_view temp_string_view_header;
+                    int fragment_count = 0;
+                    std::string temp_storage;  // Unified temporary storage for header fragments
+
+					bool request_complete = false;
+
+					static void init_parser(llhttp::llhttp_t* parser) {
+                        static const llhttp::llhttp_settings_t settings = []() {
+                            llhttp::llhttp_settings_t settings;
                             settings.on_message_begin = on_message_begin;
                             settings.on_url = on_url;
                             settings.on_url_complete = on_url_complete;
@@ -697,53 +657,10 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                             settings.on_header_value_complete = on_header_value_complete;
                             settings.on_body = on_body;
                             settings.on_message_complete = on_message_complete;
-
-                            // Initialize a new parser instance
-                            llhttp::llhttp_init(&parser, llhttp::HTTP_REQUEST, &settings);
-                            parser.data = this;
-                        }
-                        return *this;
-                    }
-                private:
-                    io::promise<req_insitu> pending_promise;
-                    io::promise<void> pending_input_promise;  // For blocked input operations
-
-                    llhttp::llhttp_settings_t settings;
-                    llhttp::llhttp_t parser;
-                    io::manager* manager;
-                    req_insitu current_request;
-                    
-                    bool buffer_save = false;
-                    
-                    // Simplified fragment handling - we only process one fragment type at a time
-                    std::string_view temp_string_view;
-                    std::string_view temp_string_view_header;
-                    int fragment_count = 0;
-                    std::string temp_storage;  // Unified temporary storage for fragments
-                    io::buf saved_buffer;      // Buffer that contains the first fragment
-                    
-                    // State tracking
-                    bool request_complete;  // Indicates if a complete request is waiting
-                    bool input_blocked;     // Indicates if input is blocked waiting for output
-                    
-                    // Deliver the completed request to the pending output, if any
-                    void deliver_request() {
-                        if (pending_promise.valid() && request_complete) {
-                            *pending_promise.data() = std::move(current_request);
-                            current_request = {};
-                            pending_promise.resolve_later();
-                            
-                            // Reset the parser and state for the next request
-                            llhttp::llhttp_resume(&parser);
-                            request_complete = false;
-                            
-                            // If there was a blocked input operation, unblock it
-                            if (input_blocked && pending_input_promise.valid()) {
-                                input_blocked = false;
-                                pending_input_promise.resolve_later();
-                            }
-                        }
-                    }
+                            return settings;
+                            }();
+						llhttp::llhttp_init(parser, llhttp::HTTP_REQUEST, &settings);
+					}
                     
                     // Callback functions for llhttp
                     static int on_message_begin(llhttp::llhttp_t* parser) {
@@ -751,14 +668,13 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                         if (!self) return 0;
                         
                         // Reset current request
-                        self->current_request = req_insitu{};
+                        self->current_request.temp = req_insitu{};
                         
                         // Reset fragment tracking
                         self->fragment_count = 0;
                         self->temp_storage.clear();
                         self->temp_string_view = {};
                         self->temp_string_view_header = {};
-                        self->saved_buffer = {};
                         
                         // Reset buffer tracking
                         self->buffer_save = false;
@@ -794,16 +710,16 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                         if (self->fragment_count > 1) {
                             io::buf url_buf(std::span(self->temp_storage.data(), self->temp_storage.size()));
                             
-                            self->current_request.url = std::string_view(
+                            self->current_request.temp->url = std::string_view(
                                 static_cast<const char*>(url_buf.data()), 
                                 self->temp_storage.size()
                             );
                             
-                            self->current_request.raw_buffers.push_back(std::move(url_buf));
+                            self->current_request.temp->raw_buffers.push_back(std::move(url_buf));
                         }
                         else
                         {
-							self->current_request.url = self->temp_string_view;
+							self->current_request.temp->url = self->temp_string_view;
                         }
                         
                         self->fragment_count = 0;
@@ -847,7 +763,7 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                                 self->temp_storage.size()
                             );
 
-                            self->current_request.raw_buffers.push_back(std::move(url_buf));
+                            self->current_request.temp->raw_buffers.push_back(std::move(url_buf));
                         }
                         else
                         {
@@ -890,16 +806,16 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                         if (self->fragment_count > 1) {
                             io::buf url_buf(std::span(self->temp_storage.data(), self->temp_storage.size()));
 
-							self->current_request.headers[self->temp_string_view_header] = std::string_view(
+							self->current_request.temp->headers[self->temp_string_view_header] = std::string_view(
 								static_cast<const char*>(url_buf.data()),
 								self->temp_storage.size()
 							);
 
-                            self->current_request.raw_buffers.push_back(std::move(url_buf));
+                            self->current_request.temp->raw_buffers.push_back(std::move(url_buf));
                         }
                         else
                         {
-							self->current_request.headers[self->temp_string_view_header] = self->temp_string_view;
+							self->current_request.temp->headers[self->temp_string_view_header] = self->temp_string_view;
                         }
 
                         self->fragment_count = 0;
@@ -912,7 +828,7 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                         auto* self = static_cast<req_parser*>(parser->data);
                         if (!self) return 0;
                         
-                        self->current_request.body_fragments.emplace_back(at, length);
+                        self->current_request.temp->body_fragments.emplace_back(at, length);
                         self->buffer_save = true;
                         
                         return 0;
@@ -922,9 +838,9 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                         auto* self = static_cast<req_parser*>(parser->data);
                         if (!self) return 0;
                         
-                        self->current_request.method = static_cast<llhttp::llhttp_method_t>(parser->method);
-                        self->current_request.major_version = parser->http_major;
-                        self->current_request.minor_version = parser->http_minor;
+                        self->current_request.temp->method = static_cast<llhttp::llhttp_method_t>(parser->method);
+                        self->current_request.temp->major_version = parser->http_major;
+                        self->current_request.temp->minor_version = parser->http_minor;
                         
                         self->request_complete = true;
                         
@@ -940,25 +856,8 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                     template <typename T_FSM>
                     inline rsp_parser(fsm<T_FSM> &state_machine) : manager(state_machine.getManager())
                     {
-                        llhttp::llhttp_settings_init(&settings);
-
-                        // Set callback functions
-                        settings.on_message_begin = on_message_begin;
-                        settings.on_status = on_status;
-                        settings.on_status_complete = on_status_complete;
-                        settings.on_header_field = on_header_field;
-                        settings.on_header_field_complete = on_header_field_complete;
-                        settings.on_header_value = on_header_value;
-                        settings.on_header_value_complete = on_header_value_complete;
-                        settings.on_body = on_body;
-                        settings.on_message_complete = on_message_complete;
-
-                        llhttp::llhttp_init(&parser, llhttp::HTTP_RESPONSE, &settings);
+                        init_parser(&parser);
                         parser.data = this;
-
-                        // Initialize state
-                        response_complete = false;
-                        input_blocked = false;
 
                         // Initialize fragment tracking
                         fragment_count = 0;
@@ -968,29 +867,19 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                     // Output operation - implements output protocol
                     inline void operator>>(future_with<rsp_insitu> &fut)
                     {
-                        // Will resolve this future when a complete HTTP response is parsed
-                        pending_promise = manager->make_future(fut, &fut.data);
-
-                        // If we already have a completed response waiting, resolve the promise immediately
+                        current_response.send_prom = manager->make_future(fut, &fut.data);
                         if (response_complete)
                         {
-                            deliver_response();
+                            current_response.try_send();
+                            response_complete = false;
                         }
                     }
 
                     // Input operation - implements input protocol for io::buf
-                    inline future operator<<(io::buf &data)
+                    inline io::future operator<<(io::buf &data)
                     {
                         future fut;
-                        io::promise<void> promise = manager->make_future(fut);
-
-                        // If input is blocked because a completed response is waiting to be fetched,
-                        // store the promise to resolve later and return the future
-                        if (input_blocked)
-                        {
-                            pending_input_promise = std::move(promise);
-                            return fut;
-                        }
+                        current_response.recv_prom = manager->make_future(fut);
 
                         // Parse the data
                         enum llhttp::llhttp_errno err = llhttp::llhttp_execute(
@@ -1004,35 +893,25 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                             // We only keep the buffer if it's part of the result (contains string_views)
                             if (buffer_save)
                             {
-                                current_response.raw_buffers.push_back(std::move(data));
+                                current_response.temp->raw_buffers.push_back(std::move(data));
                                 buffer_save = false;
                             }
                             if (response_complete == true)
                             {
-                                // If there's no pending output to take this response, block further input
-                                if (!pending_promise.valid())
-                                {
-                                    input_blocked = true;
-                                    pending_input_promise = std::move(promise);
-                                }
-                                else
-                                {
-                                    // There is an output waiting, deliver the response
-                                    deliver_response();
+                                if (current_response.try_send()) {
                                     llhttp::llhttp_reset(&parser);
-                                    // llhttp::llhttp_resume(&parser);
-                                    promise.resolve();
+                                    current_response.recv_prom.resolve();
                                 }
                             }
                             else
                             {
-                                promise.resolve();
+                                current_response.recv_prom.resolve();
                             }
                         }
                         else
                         {
                             // Parsing error
-                            promise.reject(std::make_error_code(std::errc::protocol_error));
+                            current_response.recv_prom.reject(std::make_error_code(std::errc::protocol_error));
                         }
 
                         return fut;
@@ -1041,9 +920,7 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                     IO_MANAGER_BAN_COPY(rsp_parser);
                     // Add explicit move constructor and move assignment operator
                     rsp_parser(rsp_parser&& other) noexcept 
-                        : pending_promise(std::move(other.pending_promise))
-                        , pending_input_promise(std::move(other.pending_input_promise))
-                        , manager(other.manager)
+                        : manager(other.manager)
                         , current_response(std::move(other.current_response))
                         , buffer_save(other.buffer_save)
                         , temp_string_view(other.temp_string_view)
@@ -1052,31 +929,13 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                         , temp_storage(std::move(other.temp_storage))
                         , saved_buffer(std::move(other.saved_buffer))
                         , response_complete(other.response_complete)
-                        , input_blocked(other.input_blocked)
                     {
-                        // Re-initialize settings and parser to avoid sharing parser state
-                        llhttp::llhttp_settings_init(&settings);
-                        
-                        // Set callback functions
-                        settings.on_message_begin = on_message_begin;
-                        settings.on_status = on_status;
-                        settings.on_status_complete = on_status_complete;
-                        settings.on_header_field = on_header_field;
-                        settings.on_header_field_complete = on_header_field_complete;
-                        settings.on_header_value = on_header_value;
-                        settings.on_header_value_complete = on_header_value_complete;
-                        settings.on_body = on_body;
-                        settings.on_message_complete = on_message_complete;
-
-                        // Initialize a new parser instance
-                        llhttp::llhttp_init(&parser, llhttp::HTTP_RESPONSE, &settings);
+                        init_parser(&parser);
                         parser.data = this;
                     }
 
                     rsp_parser& operator=(rsp_parser&& other) noexcept {
                         if (this != &other) {
-                            pending_promise = std::move(other.pending_promise);
-                            pending_input_promise = std::move(other.pending_input_promise);
                             manager = other.manager;
                             current_response = std::move(other.current_response);
                             buffer_save = other.buffer_save;
@@ -1086,36 +945,17 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                             temp_storage = std::move(other.temp_storage);
                             saved_buffer = std::move(other.saved_buffer);
                             response_complete = other.response_complete;
-                            input_blocked = other.input_blocked;
                             
-                            // Re-initialize settings and parser to avoid sharing parser state
-                            llhttp::llhttp_settings_init(&settings);
-                            
-                            // Set callback functions
-                            settings.on_message_begin = on_message_begin;
-                            settings.on_status = on_status;
-                            settings.on_status_complete = on_status_complete;
-                            settings.on_header_field = on_header_field;
-                            settings.on_header_field_complete = on_header_field_complete;
-                            settings.on_header_value = on_header_value;
-                            settings.on_header_value_complete = on_header_value_complete;
-                            settings.on_body = on_body;
-                            settings.on_message_complete = on_message_complete;
-
-                            // Initialize a new parser instance
-                            llhttp::llhttp_init(&parser, llhttp::HTTP_RESPONSE, &settings);
+                            init_parser(&parser);
                             parser.data = this;
                         }
                         return *this;
                     }
                 private:
-                    io::promise<rsp_insitu> pending_promise;
-                    io::promise<void> pending_input_promise; // For blocked input operations
+                    protocol_lock<rsp_insitu> current_response;
 
-                    llhttp::llhttp_settings_t settings;
                     llhttp::llhttp_t parser;
                     io::manager *manager;
-                    rsp_insitu current_response;
 
                     bool buffer_save = false;
 
@@ -1127,29 +967,25 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                     io::buf saved_buffer;     // Buffer that contains the first fragment
 
                     // State tracking
-                    bool response_complete; // Indicates if a complete response is waiting
-                    bool input_blocked;     // Indicates if input is blocked waiting for output
+                    bool response_complete = false; // Indicates if a complete response is waiting
 
-                    // Deliver the completed response to the pending output, if any
-                    void deliver_response()
-                    {
-                        if (pending_promise.valid() && response_complete)
-                        {
-                            *pending_promise.data() = std::move(current_response);
-                            current_response = {};
-                            pending_promise.resolve_later();
-
-                            // Reset the parser and state for the next response
-                            llhttp::llhttp_resume(&parser);
-                            response_complete = false;
-
-                            // If there was a blocked input operation, unblock it
-                            if (input_blocked && pending_input_promise.valid())
-                            {
-                                input_blocked = false;
-                                pending_input_promise.resolve_later();
-                            }
-                        }
+                    static void init_parser(llhttp::llhttp_t* parser) {
+                        static const llhttp::llhttp_settings_t settings = []() {
+                            llhttp::llhttp_settings_t settings;
+                            llhttp::llhttp_settings_init(&settings);
+                            // Set callback functions
+                            settings.on_message_begin = on_message_begin;
+                            settings.on_status = on_status;
+                            settings.on_status_complete = on_status_complete;
+                            settings.on_header_field = on_header_field;
+                            settings.on_header_field_complete = on_header_field_complete;
+                            settings.on_header_value = on_header_value;
+                            settings.on_header_value_complete = on_header_value_complete;
+                            settings.on_body = on_body;
+                            settings.on_message_complete = on_message_complete;
+                            return settings;
+                        }();
+                        llhttp::llhttp_init(parser, llhttp::HTTP_RESPONSE, &settings);
                     }
 
                     // Callback functions for llhttp
@@ -1160,7 +996,7 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                             return 0;
 
                         // Reset current response
-                        self->current_response = rsp_insitu{};
+                        self->current_response.temp = rsp_insitu{};
 
                         // Reset fragment tracking
                         self->fragment_count = 0;
@@ -1171,6 +1007,9 @@ int case_insensitive_compare(const char* s1, const char* s2) {
 
                         // Reset buffer tracking
                         self->buffer_save = false;
+                        
+                        // Reset completion flag
+                        self->response_complete = false;
 
                         return 0;
                     }
@@ -1213,15 +1052,15 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                         {
                             io::buf status_buf(std::span(self->temp_storage.data(), self->temp_storage.size()));
 
-                            self->current_response.status_message = std::string_view(
+                            self->current_response.temp->status_message = std::string_view(
                                 static_cast<const char *>(status_buf.data()),
                                 self->temp_storage.size());
 
-                            self->current_response.raw_buffers.push_back(std::move(status_buf));
+                            self->current_response.temp->raw_buffers.push_back(std::move(status_buf));
                         }
                         else
                         {
-                            self->current_response.status_message = self->temp_string_view;
+                            self->current_response.temp->status_message = self->temp_string_view;
                         }
 
                         self->fragment_count = 0;
@@ -1272,7 +1111,7 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                                 static_cast<const char *>(header_buf.data()),
                                 self->temp_storage.size());
 
-                            self->current_response.raw_buffers.push_back(std::move(header_buf));
+                            self->current_response.temp->raw_buffers.push_back(std::move(header_buf));
                         }
                         else
                         {
@@ -1323,15 +1162,15 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                         {
                             io::buf header_value_buf(std::span(self->temp_storage.data(), self->temp_storage.size()));
 
-                            self->current_response.headers[self->temp_string_view_header] = std::string_view(
+                            self->current_response.temp->headers[self->temp_string_view_header] = std::string_view(
                                 static_cast<const char *>(header_value_buf.data()),
                                 self->temp_storage.size());
 
-                            self->current_response.raw_buffers.push_back(std::move(header_value_buf));
+                            self->current_response.temp->raw_buffers.push_back(std::move(header_value_buf));
                         }
                         else
                         {
-                            self->current_response.headers[self->temp_string_view_header] = self->temp_string_view;
+                            self->current_response.temp->headers[self->temp_string_view_header] = self->temp_string_view;
                         }
 
                         self->fragment_count = 0;
@@ -1346,7 +1185,7 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                         if (!self)
                             return 0;
 
-                        self->current_response.body_fragments.emplace_back(at, length);
+                        self->current_response.temp->body_fragments.emplace_back(at, length);
                         self->buffer_save = true;
 
                         return 0;
@@ -1359,9 +1198,9 @@ int case_insensitive_compare(const char* s1, const char* s2) {
                             return 0;
 
                         // Status code is already set by llhttp
-                        self->current_response.status_code = parser->status_code;
-                        self->current_response.major_version = parser->http_major;
-                        self->current_response.minor_version = parser->http_minor;
+                        self->current_response.temp->status_code = parser->status_code;
+                        self->current_response.temp->major_version = parser->http_major;
+                        self->current_response.temp->minor_version = parser->http_minor;
 
                         self->response_complete = true;
 

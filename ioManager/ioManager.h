@@ -3,7 +3,7 @@
  * 
  * Pipeline Concurrency, a clear data protocol stream processing solution is provided.
  * 
- * using asio for network support.
+ * using asio for network support, openssl for encryption support.
  * 
  * C++ standard: 20 or higher
  * 
@@ -23,7 +23,7 @@ namespace io
 
         // -------------------------------basis structure--------------------------------
 
-        //Generic memory pool for single type category. 
+        //Generic memory pool for a single structure category. 
         // Not Thread safe.
         template <typename T>
         struct hive {
@@ -2234,6 +2234,28 @@ namespace io
             }
 
             inline void process_args(){}
+        };
+
+        template <typename T>
+        struct protocol_lock {
+            protocol_lock() {}
+            template<typename ...Args>
+            protocol_lock(Args...args) :temp(std::forward<Args>(args)...) {}
+            promise<T> send_prom;
+            promise<> recv_prom;
+            [[no_unique_address]] std::optional<T> temp;
+            bool try_send() {
+                if (send_prom.valid() && temp.has_value())
+                {
+					send_prom.resolve_later(std::move(*temp));
+					temp.reset();
+                    return true;
+                }
+                else
+                {
+                    return false;
+                }
+            }
         };
 
         // blackhole adaptor
