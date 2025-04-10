@@ -867,9 +867,15 @@ namespace io
             inline ~async_promise() {
                 decons();
             }
+            inline bool hasValue() { return awaiter.load(); }
         private:
             std::atomic<lowlevel::awaiter*> awaiter = nullptr;
             void decons(lowlevel::awaiter* exchange_ptr = nullptr) noexcept;
+        };
+
+        namespace async {
+			using promise = io::async_promise;
+            using future = io::async_future;
         };
 
         struct get_fsm_t {};
@@ -877,6 +883,18 @@ namespace io
         
         struct yield_t {};
         inline static constexpr yield_t yield;
+
+        template <typename T>
+            requires std::invocable<T>
+        struct defer_t {
+            T func;
+            defer_t(T&& func_) :func(func_) {}
+            ~defer_t() { func(); }
+            defer_t(const defer_t&) = delete;
+            defer_t& operator=(const defer_t&) = delete;
+            defer_t(defer_t&&) = default;
+            defer_t& operator=(defer_t&&) = default;
+        };
 
         template<typename>
         struct is_future_with : std::false_type {};
@@ -1290,13 +1308,70 @@ namespace io
                 }
 
                 //suspend
+                if (is_suspend.test() == false)
+                {
 #if IO_USE_ASIO
-                io_ctx.run_until(suspend_next);
-                io_ctx.restart();
+                    io_ctx.run_until(suspend_next);
+                    io_ctx.restart();
 #else
-                bool _nodiscard = suspend_sem.try_acquire_until(suspend_next);
+                    bool _nodiscard = suspend_sem.try_acquire_until(suspend_next);
 #endif
+                }
+                is_suspend.clear();
             }
+            
+#if IO_USE_ASIO
+            // Convert asio::awaitable to io::future
+            template <typename T, typename Executor>
+            void fromAsio(future& fut, asio::awaitable<T, Executor>&& awaitable_obj) {
+                FutureVaild(fut);
+                promise<void> prom(fut.awaiter);
+                
+                // Create a new coroutine to await the asio::awaitable
+                asio::co_spawn(
+                    io_ctx,
+                    [aw = std::move(awaitable_obj), p = std::move(prom)]() mutable -> asio::awaitable<void, Executor> {
+                        try {
+                            // Await the asio::awaitable
+                            co_await std::move(aw);
+                            
+                            // Resolve the promise when the awaitable completes
+                            p.resolve();
+                        } catch (const std::exception& e) {
+                            // Reject the promise if an exception occurs
+                            p.reject(std::make_error_code(std::errc::operation_canceled));
+                        }
+                    },
+                    asio::detached
+                );
+            }
+            
+            // Convert asio::awaitable to io::future_with
+            template <typename T, typename Executor>
+            void fromAsio(future_with<T>& fut, asio::awaitable<T, Executor>&& awaitable_obj) {
+                FutureVaild(fut);
+                promise<T> prom(fut.awaiter, &fut.data);
+                
+                // Create a new coroutine to await the asio::awaitable
+                asio::co_spawn(
+                    io_ctx,
+                    [aw = std::move(awaitable_obj), p = std::move(prom)]() mutable -> asio::awaitable<void, Executor> {
+                        try {
+                            // Await the asio::awaitable and get the result
+                            T result = co_await std::move(aw);
+                            
+                            // Resolve the promise with the result
+                            p.resolve(std::move(result));
+                        } catch (const std::exception& e) {
+                            // Reject the promise if an exception occurs
+                            p.reject(std::make_error_code(std::errc::operation_canceled));
+                        }
+                    },
+                    asio::detached
+                );
+            }
+#endif
+            
             // async co_spawn, coroutine will be run by the caller manager next turn.
             template <typename T_spawn>
             [[nodiscard]] inline fsm_handle<T_spawn> spawn_later(fsm_func<T_spawn> new_fsm) {
@@ -1322,6 +1397,10 @@ namespace io
                 }
 
                 return { new_fsm._data };
+            }
+            // async wakeup
+            void wakeup() {
+                suspend_release();
             }
             template <typename T_Prom>
             inline promise<T_Prom> make_future(future& fut, T_Prom* mem_bind)
@@ -1387,6 +1466,37 @@ namespace io
                 ret.awaiter = fut.awaiter;
                 return ret;
             }
+            template <typename Func, typename ...Args>
+            inline async_future post(manager* executor, Func func, Args&&... args) {
+                async_future fut;
+                async_promise prom = make_future(fut);
+                
+                auto func_with_args = [func = std::move(func), 
+                                       args_tuple = std::make_tuple(std::forward<Args>(args)...)]() {
+                    return std::apply(func, args_tuple);
+                };
+                
+                executor->spawn_later(
+                    [](async_promise prom, decltype(func_with_args) func)
+                    -> fsm_func<void> {
+#if IO_EXCEPTION_ON
+                        try {
+#endif
+                            func();
+                            prom.resolve();
+#if IO_EXCEPTION_ON
+                        }
+                        catch (...) {
+                            prom.reject(std::make_error_code(std::errc::invalid_argument));
+                        }
+#endif
+                        co_return;
+                    }(std::move(prom), std::move(func_with_args))).detach();
+                
+                return fut;
+            }
+            template <typename Func, typename ...Args>
+            async_future post(pool thread_pool, Func func, Args&&... args);
             manager(const manager&) = delete;
             manager& operator=(const manager&) = delete;
             manager(manager&& right) = delete;
@@ -1415,6 +1525,8 @@ namespace io
             std::queue<std::coroutine_handle<>> pendingTask; //async queueing to pending task
             std::atomic_flag spinLock_pd = ATOMIC_FLAG_INIT;
 
+            std::atomic_flag is_suspend = ATOMIC_FLAG_INIT;
+
             std::multimap<std::chrono::steady_clock::time_point, lowlevel::awaiter*> time_chain;
 
             lowlevel::awaiter* resolve_queue_local = nullptr;   //local queueing to resolve
@@ -1428,6 +1540,7 @@ namespace io
             std::queue<std::coroutine_handle<>> delay_deconstruct;  //coroutines on call chain and needs deconstruct.
 
             std::chrono::nanoseconds suspend_max = std::chrono::nanoseconds(400000000);   //defalut 400ms
+
 #if IO_USE_ASIO
             // use run_until in io_context
             asio::io_context io_ctx{1};
@@ -1436,14 +1549,130 @@ namespace io
             std::binary_semaphore suspend_sem = std::binary_semaphore(1);
 #endif
             inline void suspend_release() {
+                if (is_suspend.test_and_set() == false)
+                {
 #if IO_USE_ASIO
-                io_ctx.stop();
+                    io_ctx.stop();
 #else
-                this->suspend_sem.release();
+                    this->suspend_sem.release();
 #endif
+                }
             }
 
             io::hive<lowlevel::awaiter> awaiter_hive = io::hive<lowlevel::awaiter>(1000);
+        };
+
+        //thread pool. 
+        // Launch when constructing.
+        struct pool {
+			__IO_INTERNAL_HEADER_PERMISSION;
+            struct _thread {
+				std::thread thread;
+                std::atomic_flag stopFlag = ATOMIC_FLAG_INIT;
+				manager mngr;
+                inline _thread() {
+                    thread = std::thread([this]() {
+                        while (!stopFlag.test(std::memory_order_acquire)) {
+                            mngr.drive();
+                        }
+                    });
+                }
+                _thread(const _thread&) = delete;
+                _thread& operator=(const _thread&) = delete;
+                _thread(_thread&&) = delete;
+                _thread& operator=(_thread&&) = delete;
+            };
+            std::deque<_thread> threadsInPool;
+            // Thread distribution counter
+            std::atomic<size_t> next_thread = 0;
+
+            pool(const pool&) = delete;
+            pool& operator=(const pool&) = delete;
+            inline pool(pool&& other) noexcept : threadsInPool(std::move(other.threadsInPool)), next_thread(other.next_thread.load()) {}
+            inline pool& operator=(pool&& other) noexcept {
+                if (this != &other) {
+                    stop();
+                    threadsInPool = std::move(other.threadsInPool);
+					next_thread = other.next_thread.load();
+                }
+                return *this;
+            }
+
+            /**
+             * Posts a function to be executed on a thread in the pool
+             * 
+             * @return async_future that can be used to await completion
+             */
+            template <typename Func, typename ...Args>
+            inline async_future post(manager* future_carrier, Func func, Args&&... args) {
+                if (threadsInPool.empty()) {
+                    async_future fut;
+                    auto prom = future_carrier->make_future(fut);
+                    prom.reject(std::make_error_code(std::errc::not_connected));
+                    return fut;
+                }
+                
+                return future_carrier->post(
+                    &(threadsInPool[next_thread++ % threadsInPool.size()].mngr),
+                    std::move(func),
+                    std::forward<Args>(args)...);
+            }
+            
+            /**
+             * Stops all threads in the pool and clears the pool
+			 * This thread will be join until all threads are finished
+             */
+            inline void stop() {
+                if (threadsInPool.empty()) {
+                    return;
+                }
+                
+                for (auto& t : threadsInPool) {
+                    t.stopFlag.test_and_set(std::memory_order_release);
+                    t.mngr.wakeup();
+                }
+                
+                for (auto& t : threadsInPool) {
+                    if (t.thread.joinable()) {
+                        t.thread.join();
+                    }
+                }
+                
+                threadsInPool.clear();
+            }
+            
+            /**
+             * Spawns a coroutine to be executed on a thread in the pool
+             */
+            template <typename T_spawn>
+            inline fsm_handle<T_spawn> spawn_later(fsm_func<T_spawn> new_fsm) {
+                if (threadsInPool.empty()) {
+                    return fsm_handle<T_spawn>{};
+                }
+                
+                manager* target_manager = &(threadsInPool[next_thread % threadsInPool.size()].mngr);
+                next_thread++;
+                
+                return target_manager->spawn_later(std::move(new_fsm));
+            }
+            
+            /**
+             * Creates a pool with specified thread count
+             */
+			inline pool(size_t thread_count = 1) {
+                threadsInPool.resize(thread_count);
+            }
+            
+            /**
+             * Checks if the pool is currently running
+             */
+            inline bool is_running() const {
+                return threadsInPool.size();
+            }
+            
+            inline ~pool() {
+                stop();
+            }
         };
 
 
@@ -2293,14 +2522,9 @@ namespace io
 
 
 // namespace io::prot -- software simulated protocols
-
-#if __has_include("protocol/chan.h")
 #include "protocol/chan.h"
-#endif
-
-#if __has_include("protocol/async_chan.h")
 #include "protocol/async_chan.h"
-#endif
+#include "protocol/async_semaphore.h"
 
 #if __has_include("protocol/kcp/kcp.h")
 #include "protocol/kcp/kcp.h"

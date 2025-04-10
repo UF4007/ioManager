@@ -724,8 +724,8 @@ This test evaluates the performance of the minimal HTTP RPC server implementatio
 
 | Test Scenario | Configuration | Requests/sec | Avg Latency |
 |---------------|--------------|--------------|-------------|
-| High Concurrency | 12 threads, 10,000 connections, 30s | 23,064.67 | 31.57ms |
-| Moderate Load | 2 threads, 100 connections, 10s | 25,665.37 | 3.55ms |
+| High Concurrency | 10,000 connections | 23,064.67 | 31.57ms |
+| Moderate Load | 100 connections | 25,665.37 | 3.55ms |
 
 *The HTTP server implementation can be found in `demo.h` in the `coro_http_rpc_demo()` function.*
 

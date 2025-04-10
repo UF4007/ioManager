@@ -1,16 +1,34 @@
 #pragma once
 namespace io {
     inline namespace IO_LIB_VERSION___ {
+        struct chan_err : public std::error_category {
+            inline const char* name() const noexcept override {
+                return "channel error";
+            }
+            inline std::string message(int ev) const override {
+                switch (ev) {
+                case 1:
+                    return "Error 1: Channel closed!";
+                default:
+                    return "Unknown error!";
+                }
+            }
+            static const std::error_category& global() {
+                thread_local chan_err instance;
+                return instance;
+            }
+        };
+
         //channel, use it within a single manager(thread) 
+		// Guaranteed the order of the elements.
+        // Implements by circular buffer. Not any dynamic memory allocates inside.
         // Not Thread safe.
-        // UB: Visit a std::span that was got by the previous operator>>() after operator<<() or co_await.
-        // When co_await the future of get_span() (alias operator>>()), the awaiter must be triggered when the future turns to resolve immediately. Otherwise, the span got by the future will be invalid.
         template <typename T>
             requires std::is_move_constructible_v<T>
         struct chan {
             // Input protocol implemention. 
             // The memory's lifetime that is pointed by the std::span must be longer than the future returned.
-            // Use the move operator=, not the copy.
+            // Inside, we use the move operator= instead of the copy.
             inline future operator<<(const std::span<T>& in) {
                 std::span<T> data_in = in;
                 chan_base* base = this->getPtr();
@@ -192,24 +210,6 @@ namespace io {
                 return this->getPtr()->close();
             }
 
-            struct err_category : public std::error_category {
-                inline const char* name() const noexcept override {
-                    return "channel error";
-                }
-                inline std::string message(int ev) const override {
-                    switch (ev) {
-                    case 1:
-                        return "Error 1: Channel closed!";
-                    default:
-                        return "Unknown error!";
-                    }
-                }
-                static const std::error_category& global() {
-                    thread_local err_category instance;
-                    return instance;
-                }
-            };
-
             template <typename T_FSM>
             inline chan(fsm<T_FSM>& _fsm, size_t capacity, std::initializer_list<T> init_list = {}) :chan(_fsm.getManager(), capacity, init_list) {}
             inline chan(manager* mngr, size_t capacity, std::initializer_list<T> init_list = {}) {
@@ -256,6 +256,8 @@ namespace io {
                     recv_block = 2
                 }status;
                 bool closed = false;
+
+                char align[2];
 
                 bool is_full;
                 size_t capacity;
@@ -464,7 +466,7 @@ namespace io {
                     while (waiting.size())
                     {
                         auto& [prom, span] = *(waiting.begin());
-                        prom.reject_later(std::error_code(1, err_category::global()));
+                        prom.reject_later(std::error_code(1, chan_err::global()));
                         waiting.erase(waiting.begin());
                     }
                 }
@@ -487,7 +489,7 @@ namespace io {
             inline future getClosedFuture(chan_base* base) {
                 future ret;
                 promise<> prom = base->mngr->make_future(ret);
-                prom.reject_later(std::error_code(1, err_category::global()));
+                prom.reject_later(std::error_code(1, chan_err::global()));
                 return ret;
             }
             inline chan_base* getPtr() { return (chan_base*)_base.get(); }
@@ -510,60 +512,6 @@ namespace io {
             chan_s(chan<T>&& c) : chan<T>(std::move(c)) {}
             
             future get_and_copy(const std::span<T>& out) = delete;
-        };
-
-        namespace prot {
-            /**
-             * @brief Output protocol implementation for the channel.
-             *
-             * Provides an actual storage buffer for data output from the channel.
-             *    While std::span is just a view without owning memory, chan_prot defines
-             *    a fixed-size array (std::array) to store data, solving the buffer ownership
-             *    problem in pipeline design.
-             *
-             * Controls batch size for data reading through the Out_buf_size template parameter,
-             *    determining how many items will be read from the channel at once.
-             *
-             * @tparam Out_buf_size Size of the output buffer, controls batch size per read operation.
-             *                      Must be greater than 0.
-             */
-            template <typename T, size_t Out_buf_size = 1>
-                requires (Out_buf_size != 0)
-            struct chan : io::chan<T> {
-                template <typename ...Args>
-                chan(Args&&... c) : io::chan<T>(std::forward<Args>(c)...) {}
-
-                using prot_output_type =
-                    std::conditional_t<
-                    Out_buf_size == 1,
-                    T,
-                    std::array<T, Out_buf_size>
-                    >;
-
-                // Output protocol implementation
-                inline void operator>>(future_with<prot_output_type>& out_future) {
-                    if constexpr (Out_buf_size == 1)
-                    {
-                        out_future = this->get_and_copy(std::span(&out_future.data, 1));
-                    }
-                    else
-                    {
-                        out_future = this->get_and_copy(std::span(out_future.data.data(), Out_buf_size));
-                    }
-                }
-
-                [[no_unique_address]] std::conditional_t<
-                    Out_buf_size == 1,
-                    T,
-                    std::monostate
-                > temp;
-
-                // Input protocol implementation
-                inline future operator<<(T& in) requires (Out_buf_size == 1) {
-                    temp = std::move(in);
-                    return this->io::chan<T>::operator<<(std::span(&temp, 1));
-                }
-            };
         };
     };
 };

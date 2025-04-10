@@ -125,6 +125,17 @@ class lowlevel {
         // sync co_spawn, run coroutine immediately.
         template <typename T_spawn>
         [[nodiscard]] fsm_handle<T_spawn> spawn_now(fsm_func<T_spawn> new_fsm);
+        
+#if IO_USE_ASIO
+        // Convert asio::awaitable to io::future
+        template <typename T, typename Executor>
+        void fromAsio(future& fut, asio::awaitable<T, Executor>&& awaitable_obj);
+        
+        // Convert asio::awaitable to io::future_with
+        template <typename T, typename Executor>
+        void fromAsio(future_with<T>& fut, asio::awaitable<T, Executor>&& awaitable_obj);
+#endif
+
         inline bool detached() { return is_detached; }
         inline bool deconstructing() { return is_deconstructing; }
         fsm_base(const fsm_base &) = delete;

@@ -44,25 +44,28 @@ io::fsm_func<void> coro_limit_test(int num)
     }
 }
 
-io::fsm_func<void> coro_chan(size_t *count)
+io::fsm_func<void> coro_chan(size_t *count, size_t* throughput)
 {
     io::fsm<void> &fsm = co_await io::get_fsm;
     io::chan<char> chan(fsm, 1000);
     io::fsm_handle<void> handle;
 
-    handle = fsm.spawn_now([](io::chan_r<char> ch, size_t* count) -> io::fsm_func<void>
+    handle = fsm.spawn_now([](io::chan_r<char> ch, size_t* count, size_t* throughput) -> io::fsm_func<void>
         {
             std::string str;
-            str.resize(1024 * 10);
+            str.resize(64);
             io::fsm<void>& fsm = co_await io::get_fsm;
             while (1)
             {
                 co_await ch.get_and_copy(std::span<char>(str));
                 if (count)
-                    *count += str.size();
+                {
+                    (*count)++;
+                    *throughput += str.size();
+                }
                 else
                     std::cout << str << std::endl;
-            } }(chan, count));
+            } }(chan, count, throughput));
 
     while (1)
     {
@@ -77,20 +80,119 @@ io::fsm_func<void> coro_chan_benchmark()
 {
     constexpr size_t TEST_SECONDS = 3;
     io::fsm<void> &fsm = co_await io::get_fsm;
+    size_t exchange_count = 0;
     size_t byte_count = 0;
-    io::fsm_handle<void> h = fsm.spawn_now(coro_chan(&byte_count));
+    io::fsm_handle<void> h = fsm.spawn_now(coro_chan(&exchange_count, &byte_count));
     io::clock clock;
     fsm.make_clock(clock, std::chrono::seconds(TEST_SECONDS));
     co_await clock;
 
     double mb_total = byte_count / (1024.0 * 1024.0);
     double mb_per_second = mb_total / TEST_SECONDS;
+    double exchange_per_second = (double)exchange_count / TEST_SECONDS;
+    const double NANOSECONDS_PER_SECOND = 1e9;
+    double nanoseconds_per_operation = NANOSECONDS_PER_SECOND / exchange_per_second / 2;
 
+    std::cout << "Async Channel Test Results:" << std::endl;
     std::cout << "Total data transmitted in " << TEST_SECONDS << " seconds: " << std::fixed << std::setprecision(2)
-              << mb_total << " MB" << std::endl;
+        << mb_total << " MB" << std::endl;
     std::cout << "Average throughput: " << mb_per_second << " MB/s" << std::endl;
+    std::cout << "Total data exchange: " << exchange_count << std::endl;
+    std::cout << "Average latency: " << nanoseconds_per_operation << " ns/op" << std::endl;
 
     fsm.getManager()->spawn_later(coro_chan_benchmark()).detach();
+}
+
+io::fsm_func<void> coro_async_chan(std::atomic<size_t> *count, std::atomic<size_t>* throughput, size_t thread_pool_sum)
+{
+    constexpr size_t CONSUMERS = 16;
+    constexpr size_t PRODUCERS = 16;
+    io::pool thread_pool(thread_pool_sum); // Create a thread pool with 4 threads
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    io::async::chan<char> chan(fsm.getManager(), 1000);
+    io::async::semaphore stop_singal(fsm.getManager(), 0);
+    IO_DEFER = [&]() {
+        chan.close();
+        while (stop_singal.try_acquire(PRODUCERS + CONSUMERS) == false);    // Stackless coroutines make things complicated, spinning locks make things easy.
+        };
+
+    // Launch multiple producers
+    for (int i = 0; i < PRODUCERS; ++i) {
+        thread_pool.spawn_later([](io::async::chan<char> ch, io::async::semaphore stop_singal) -> io::fsm_func<void> {
+            io::fsm<void>& fsm = co_await io::get_fsm;
+            ch.setManager(fsm.getManager());
+            char send[] = "this is a very long long string for async channel test. ";
+            std::span<char> send_span(send, sizeof(send));
+            while (1) {
+                co_await (ch << send_span);
+                if (ch.isClosed())
+                    break;
+            }
+            stop_singal.release();
+            co_return;
+        }(chan, stop_singal)).detach();
+    }
+
+    // Launch multiple consumers
+    for (int i = 0; i < CONSUMERS; ++i) {
+        thread_pool.spawn_later([](io::async::chan<char> ch, io::async::semaphore stop_singal, std::atomic<size_t>* count, std::atomic<size_t>* throughput) -> io::fsm_func<void> {
+            io::fsm<void>& fsm = co_await io::get_fsm;
+            ch.setManager(fsm.getManager());
+            std::string str;
+            str.resize(1024 * 10);
+            while (1) {
+                co_await ch.listen();
+                std::span<char> str_span(str.data(), str.size());
+                size_t read_size = ch.accept(str_span);
+                if (throughput && count)
+                {
+                    *throughput += read_size;
+                    (*count)++;
+                }
+                else
+                    std::cout << str << std::endl;
+                if (ch.isClosed())
+                    break;
+            }
+            stop_singal.release();
+            co_return;
+        }(chan, stop_singal, count, throughput)).detach();
+    }
+
+    io::future block_forever;
+    fsm.make_future(block_forever);
+    co_await block_forever;
+
+    co_return;
+}
+
+io::fsm_func<void> coro_async_chan_benchmark()
+{
+    constexpr size_t TEST_SECONDS = 3;
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    std::atomic<size_t> exchange_count = 0;
+    std::atomic<size_t> byte_count = 0;
+
+    // Start the async channel test with the thread pool
+    io::fsm_handle<void> h = fsm.spawn_now(coro_async_chan(&exchange_count, &byte_count, 32));
+    io::clock clock;
+    fsm.make_clock(clock, std::chrono::seconds(TEST_SECONDS));
+    co_await clock;
+
+    double mb_total = byte_count / (1024.0 * 1024.0);
+    double mb_per_second = mb_total / TEST_SECONDS;
+    double exchange_per_second = (double)exchange_count / TEST_SECONDS;
+    const double NANOSECONDS_PER_SECOND = 1e9;
+    double nanoseconds_per_operation = NANOSECONDS_PER_SECOND / exchange_per_second / 2;
+
+    std::cout << "Async Channel Test Results:" << std::endl;
+    std::cout << "Total data transmitted in " << TEST_SECONDS << " seconds: " << std::fixed << std::setprecision(2)
+        << mb_total << " MB" << std::endl;
+    std::cout << "Average throughput: " << mb_per_second << " MB/s" << std::endl;
+    std::cout << "Total data exchange: " << exchange_count << std::endl;
+    std::cout << "Average latency: " << nanoseconds_per_operation << " ns/op" << std::endl;
+
+    fsm.getManager()->spawn_later(coro_async_chan_benchmark()).detach();
 }
 
 io::fsm_func<void> coro_chan_construct_correct_test()
@@ -427,13 +529,14 @@ io::fsm_func<void> coro_chan_peak_shaving()
     ProducerProtocol producer(fsm);
     ConsumerProtocol consumer(fsm);
 
-    io::chan<int> ch = io::chan<int>(fsm, 100);
+    //io::chan<int> ch = io::chan<int>(fsm, 100);
+    io::async::chan<int> ch = io::async::chan<int>(fsm, 100);
     
     // With a chan
     auto pipeline = io::pipeline<>() >> producer >> [ch](const int& a)mutable->std::optional<int> {
         std::cout << "Channel capacity: (" << ch.size() << "/" << ch.capacity() << ")" << std::endl;
         return a;
-        } >> io::prot::chan<int>(ch) >> consumer;
+        } >> io::prot::chan(ch) >> consumer;
 
     // Without chan, the producer will be block during the consumer being await.
     //auto pipeline = io::pipeline<>() >> producer >> consumer;
@@ -1350,6 +1453,73 @@ io::fsm_func<void> coro_http_rpc_demo() {
     co_return;
 }
 
+io::fsm_func<void> coro_thread_pool_test()
+{
+    io::fsm<void>& fsm = co_await io::get_fsm;
+    std::cout << "\n=== Thread Pool Async Post Test ===\n" << std::endl;
+    
+    constexpr size_t NUM_THREADS = 4;
+    io::pool thread_pool(NUM_THREADS);
+    
+    std::cout << "Created thread pool with " << NUM_THREADS << " threads" << std::endl;
+    
+    std::cout << "\n--- Test 1: Basic post and wait ---\n" << std::endl;
+    {
+        io::timer::up timer;
+        timer.start();
+        
+        io::async_future future = thread_pool.post(fsm.getManager(), 
+            []() {
+                std::cout << "Task executing in thread " << std::this_thread::get_id() << std::endl;
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                std::cout << "Task completed" << std::endl;
+            });
+        
+        std::cout << "Waiting for task to complete..." << std::endl;
+        co_await future;
+        
+        auto duration = timer.lap();
+        std::cout << "Task completed in " 
+                  << std::chrono::duration_cast<std::chrono::milliseconds>(duration).count() 
+                  << " ms" << std::endl;
+    }
+    
+    std::cout << "\n--- Test 2: Multiple concurrent tasks ---\n" << std::endl;
+    {
+        constexpr size_t NUM_TASKS = 10;
+        std::vector<io::async_future> futures;
+        
+        io::timer::up timer;
+        timer.start();
+        
+        std::cout << "Posting " << NUM_TASKS << " tasks..." << std::endl;
+        
+        for (size_t i = 0; i < NUM_TASKS; i++) {
+            futures.push_back(thread_pool.post(fsm.getManager(), 
+                [i]() {
+                    std::cout << "Task " << i << " executing in thread " 
+                              << std::this_thread::get_id() << std::endl;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    std::cout << "Task " << i << " completed" << std::endl;
+                }));
+        }
+        
+        for (auto& future : futures) {
+            co_await future;
+        }
+        
+        auto duration = timer.lap();
+        std::cout << "All tasks completed in " 
+                  << std::chrono::duration_cast<std::chrono::milliseconds>(duration).count() 
+                  << " ms" << std::endl;
+                  
+        std::cout << "Tasks ran concurrently (total time < sum of individual task times)" << std::endl;
+
+        fsm.getManager()->spawn_later(coro_thread_pool_test()).detach();
+        co_return;
+    }
+}
+
 void io_testmain_v3()
 {
     io::manager mngr;
@@ -1368,7 +1538,16 @@ void io_testmain_v3()
         if (true)
             mngr.spawn_later(coro_chan_benchmark()).detach();
         else
-            mngr.spawn_later(coro_chan(nullptr)).detach();
+            mngr.spawn_later(coro_chan(nullptr, nullptr)).detach();
+    }
+
+    // test of async_chan
+    if (true)
+    {
+        if (true)
+            mngr.spawn_later(coro_async_chan_benchmark()).detach();
+        else
+            mngr.spawn_later(coro_async_chan(nullptr, nullptr, 4)).detach();
     }
 
     // construction correctness test for chan
@@ -1415,9 +1594,13 @@ void io_testmain_v3()
     if (false)
         mngr.spawn_later(coro_pipeline_test()).detach();
 
-    // mininum http rpc server
-    if (true)
+    // http rpc demo
+    if (false)
         mngr.spawn_later(coro_http_rpc_demo()).detach();
+
+    // thread pool test
+    if (false)
+        mngr.spawn_later(coro_thread_pool_test()).detach();
 
     while (1)
     {

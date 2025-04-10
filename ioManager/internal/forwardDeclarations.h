@@ -2,11 +2,11 @@
 																	template <typename _Struc2> friend class io::dualbuf;\
 																	friend class io::lowlevel;\
 																	friend struct io::future;\
+																	friend struct async_future;\
+																	friend struct async_promise;\
 																	template <typename T2>requires (!std::is_same_v<T2, void>)friend struct io::future_with;\
 																	friend struct io::clock;\
 																	template <typename T2>friend struct io::promise;\
-																	friend struct io::async_future;\
-																	friend struct io::async_promise;\
 																	template <typename T2>friend struct io::fsm;\
 																	template <typename T2>requires (std::is_same_v<T2, void> || std::is_default_constructible_v<T2>)friend struct io::fsm_func;\
 																	template <typename T2>friend struct io::fsm_handle;\
@@ -39,6 +39,7 @@ template <typename T>
 struct fsm_func;
 template <typename T>struct fsm_handle;
 struct manager;
+struct pool;
 struct yield_t;
 template <typename Front, typename Rear, typename Adaptor>struct pipeline_constructor;
 template <typename Front, typename Rear, typename Adaptor>struct pipeline;
@@ -59,3 +60,7 @@ namespace sock {
 #define IO_MANAGER_BAN_MOVE(___obj___)  \
     ___obj___(___obj___ &&) = delete;   \
     ___obj___ &operator=(___obj___ &&) = delete;
+
+#define ___DEFER_CONCAT_IMPL(x, y) x##y
+#define ___DEFER_CONCAT(x, y) ___DEFER_CONCAT_IMPL(x, y)
+#define IO_DEFER io::defer_t ___DEFER_CONCAT(defer_obj_, __LINE__)

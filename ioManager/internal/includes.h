@@ -76,4 +76,8 @@
 #include "../asio/asio/ip/resolver_query_base.hpp"
 #include "../asio/asio/ip/tcp.hpp"
 #include "../asio/asio/ip/udp.hpp"
+#include "../asio/asio/co_spawn.hpp"
+#include "../asio/asio/detached.hpp"
+#include "../asio/asio/awaitable.hpp"
+#include "../asio/asio/dispatch.hpp"
 #endif

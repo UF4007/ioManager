@@ -324,3 +324,25 @@ inline bool io::async_promise::reject(std::error_code ec) {
     }
     return false;
 }
+
+#if IO_USE_ASIO
+// fromAsio implementation for void result type
+template <typename T, typename Executor>
+inline void io::lowlevel::fsm_base::fromAsio(future& fut, asio::awaitable<T, Executor>&& awaitable_obj) {
+    mngr->fromAsio(fut, std::move(awaitable_obj));
+}
+
+// fromAsio implementation for non-void result type
+template <typename T, typename Executor>
+inline void io::lowlevel::fsm_base::fromAsio(future_with<T>& fut, asio::awaitable<T, Executor>&& awaitable_obj) {
+    mngr->fromAsio(fut, std::move(awaitable_obj));
+}
+#endif
+
+
+//manager
+template <typename Func, typename ...Args>
+inline io::async_future io::manager::post(pool thread_pool, Func func, Args&&... args)
+{
+	return thread_pool.post(this, func, std::forward<Args>(args)...);
+}
