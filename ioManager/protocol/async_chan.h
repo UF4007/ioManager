@@ -68,6 +68,7 @@ namespace io {
                     // If we're under capacity, resolve immediately
                     if (base->size > base->capacity) {
                         seg->prom = std::move(prom);
+                        base->send_blocking = seg;
                     }
                     
                     // If there are waiting receivers, wake up one
@@ -126,6 +127,7 @@ namespace io {
                     
                     // Outer loop, try to consume one segment each iteration
                     while (totalRead < out.size()) {
+                        io::async_promise resolve_blocking;
                         segment* current = nullptr;
                         size_t toRead = 0;
                         
@@ -150,9 +152,18 @@ namespace io {
                         // Considering both the remaining space in out and available data in segment
                         size_t availableInSegment = current->length - current->consumed;
                         toRead = std::min(availableInSegment, out.size() - totalRead);
+
+                        if (base->size - toRead <= base->capacity && base->send_blocking) {
+                            resolve_blocking = std::move(base->send_blocking->prom);
+                            base->send_blocking = base->send_blocking->next;
+                        }
+                        else if (base->send_blocking == current) {
+                            resolve_blocking = std::move(base->send_blocking->prom);
+                            base->send_blocking = current->next;
+                        }
                         
                         // Update channel size
-                        base->size -= toRead;
+                        base->size -= availableInSegment;
                         
                         // Remove it from the list
                         base->send_start = current->next;
@@ -162,6 +173,8 @@ namespace io {
                         
                         // Release lock
                         base->spinLock.clear(std::memory_order_release);
+
+                        resolve_blocking.resolve();
                         
                         // Process data outside of lock - allows other threads to access the channel while we process data
                         if (toRead > 0) {
@@ -186,6 +199,7 @@ namespace io {
                             }
                             else {
                                 // Put the remaining segment return to the channel.
+                                current->consumed += toRead;
                                 availableInSegment = current->length - current->consumed;
                                 while (base->spinLock.test_and_set(std::memory_order_acquire)) {
                                     if (base->closed.test()) {
@@ -196,6 +210,7 @@ namespace io {
                                         return totalRead; // Channel closed and no data
                                     }
                                 }
+                                base->size += availableInSegment;
                                 current->next = base->send_start;
                                 base->send_start = current;
                                 if (base->send_end == nullptr) {
@@ -258,6 +273,7 @@ namespace io {
                 struct chan_base {
                     std::deque<async_promise> recv_queue;   //locked zone.
                     segment* send_start = nullptr;          //locked zone.
+                    segment* send_blocking = nullptr;       //locked zone.
                     segment* send_end = nullptr;            //locked zone.
                     size_t size = 0;                        //locked zone.
                     std::atomic_flag spinLock = ATOMIC_FLAG_INIT;
@@ -289,8 +305,8 @@ namespace io {
                         send_start = send_end = nullptr;
                         size = 0;
                         
-                        // Release the lock
-                        spinLock.clear(std::memory_order_release);
+                        // Never release the lock
+                        //spinLock.clear(std::memory_order_release);
                         
                         // Destroy all segments
                         while (current != nullptr) {
@@ -396,12 +412,10 @@ namespace io {
             template <typename T, size_t Out_buf_size = 1, bool Is_Async = false>
                 requires (Out_buf_size != 0)
             struct chan : io::chan<T> {
-                // Replace variadic template constructor with specific constructors
                 chan(const io::chan<T>& c) : io::chan<T>(c) {}
                 
                 chan(io::chan<T>&& c) : io::chan<T>(std::move(c)) {}
 
-                // For explicit buffer size specification
                 template <size_t BufferSize = Out_buf_size>
                     requires (BufferSize != 0)
                 chan(const io::chan<T>& c, std::integral_constant<size_t, BufferSize>) : io::chan<T>(c) {
@@ -535,7 +549,6 @@ namespace io {
                 }
 
             public:
-                // Replace variadic template constructor with specific constructors
                 chan(const io::async::chan<T>& c) : io::async::chan<T>(c) {
                     init_async_fsm();
                 }
@@ -544,7 +557,6 @@ namespace io {
                     init_async_fsm();
                 }
 
-                // For explicit buffer size specification
                 template <size_t BufferSize = Out_buf_size>
                     requires (BufferSize != 0)
                 chan(const io::async::chan<T>& c, std::integral_constant<size_t, BufferSize>) : io::async::chan<T>(c) {

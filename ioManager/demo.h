@@ -105,11 +105,10 @@ io::fsm_func<void> coro_chan_benchmark()
 
 io::fsm_func<void> coro_async_chan(std::atomic<size_t> *count, std::atomic<size_t>* throughput, size_t thread_pool_sum)
 {
-    constexpr size_t CONSUMERS = 16;
     constexpr size_t PRODUCERS = 16;
     io::pool thread_pool(thread_pool_sum); // Create a thread pool with 4 threads
     io::fsm<void> &fsm = co_await io::get_fsm;
-    io::async::chan<char> chan(fsm.getManager(), 1000);
+    io::async::chan<char> chan(fsm.getManager(), 1024 * 16);
     io::async::semaphore stop_singal(fsm.getManager(), 0);
     IO_DEFER = [&]() {
         chan.close();
@@ -121,7 +120,7 @@ io::fsm_func<void> coro_async_chan(std::atomic<size_t> *count, std::atomic<size_
         thread_pool.spawn_later([](io::async::chan<char> ch, io::async::semaphore stop_singal) -> io::fsm_func<void> {
             io::fsm<void>& fsm = co_await io::get_fsm;
             ch.setManager(fsm.getManager());
-            char send[] = "this is a very long long string for async channel test. ";
+            char send[] = "this is a very long long string for async channel test.";
             std::span<char> send_span(send, sizeof(send));
             while (1) {
                 co_await (ch << send_span);
@@ -139,7 +138,7 @@ io::fsm_func<void> coro_async_chan(std::atomic<size_t> *count, std::atomic<size_
             io::fsm<void>& fsm = co_await io::get_fsm;
             ch.setManager(fsm.getManager());
             std::string str;
-            str.resize(1024 * 10);
+            str.resize(1024 * 16);
             while (1) {
                 co_await ch.listen();
                 std::span<char> str_span(str.data(), str.size());
@@ -150,7 +149,9 @@ io::fsm_func<void> coro_async_chan(std::atomic<size_t> *count, std::atomic<size_
                     (*count)++;
                 }
                 else
-                    std::cout << str << std::endl;
+                {
+                    std::cout << str.substr(0, read_size) << std::endl;
+                }
                 if (ch.isClosed())
                     break;
             }
@@ -174,7 +175,7 @@ io::fsm_func<void> coro_async_chan_benchmark()
     std::atomic<size_t> byte_count = 0;
 
     // Start the async channel test with the thread pool
-    io::fsm_handle<void> h = fsm.spawn_now(coro_async_chan(&exchange_count, &byte_count, 32));
+    io::fsm_handle<void> h = fsm.spawn_now(coro_async_chan(&exchange_count, &byte_count, 8));
     io::clock clock;
     fsm.make_clock(clock, std::chrono::seconds(TEST_SECONDS));
     co_await clock;
@@ -529,8 +530,8 @@ io::fsm_func<void> coro_chan_peak_shaving()
     ProducerProtocol producer(fsm);
     ConsumerProtocol consumer(fsm);
 
-    //io::chan<int> ch = io::chan<int>(fsm, 100);
-    io::async::chan<int> ch = io::async::chan<int>(fsm, 100);
+    //io::chan<int> ch = io::chan<int>(fsm, 10);
+    io::async::chan<int> ch = io::async::chan<int>(fsm, 10);
     
     // With a chan
     auto pipeline = io::pipeline<>() >> producer >> [ch](const int& a)mutable->std::optional<int> {
@@ -1542,7 +1543,7 @@ void io_testmain_v3()
     }
 
     // test of async_chan
-    if (true)
+    if (false)
     {
         if (true)
             mngr.spawn_later(coro_async_chan_benchmark()).detach();
@@ -1559,7 +1560,7 @@ void io_testmain_v3()
         mngr.spawn_later(coro_chan_peak_shaving()).detach();
         
     // coroutine benchmark
-    if (false)
+    if (true)
         mngr.spawn_later(coro_benchmark()).detach();
 
     // compensated timer test
