@@ -32,7 +32,7 @@
 
 - **管线化并发**：将协议组装成自动收发数据的管线
 - **Future/Promise**：JavaScript风格的future/promise，支持all/any/race/allSettle操作
-- **chan**：Go语言风格的chan和async_chan，用于协程间通信、线程间通信
+- **chan**：Go语言风格的io::chan和io::async::chan，用于协程间通信、线程间通信
 - **RAII友好**：资源管理遵循RAII原则，确保安全性和可靠性
 - **高性能**：接近原生C++协程的速度
 
