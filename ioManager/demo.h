@@ -106,6 +106,7 @@ io::fsm_func<void> coro_chan_benchmark()
 io::fsm_func<void> coro_async_chan(std::atomic<size_t> *count, std::atomic<size_t>* throughput, size_t thread_pool_sum)
 {
     constexpr size_t PRODUCERS = 16;
+    constexpr size_t CONSUMERS = 16;
     io::pool thread_pool(thread_pool_sum); // Create a thread pool with 4 threads
     io::fsm<void> &fsm = co_await io::get_fsm;
     io::async::chan<char> chan(fsm.getManager(), 1024 * 16);
