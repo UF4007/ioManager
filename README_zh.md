@@ -249,7 +249,7 @@ io::fsm_func<void> consumer_coroutine(io::future fut)
 }
 ```
 
-> **注意：** future/promise对是一次性的。在调用`prom.resolve()`后，promise将无效，future将不能再用于await操作。必须重新构造才能重用。
+> **注意：** future/promise对是一次性的。在调用`prom.resolve()`后，promise将无效，future将不能再用于await操作。必须重新make才能重用。
 
 #### 使用Future/Promise传递数据
 
