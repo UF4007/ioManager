@@ -25,7 +25,7 @@ namespace io
 
         //Generic memory pool for a single structure category. 
         // Not Thread safe.
-        template <typename T>
+        template <typename T, size_t batch_size = 16>
         struct hive {
             explicit inline hive(size_t vacancy_limit = 100) :size_limit(vacancy_limit) {}
             inline ~hive() {
@@ -37,9 +37,15 @@ namespace io
                 {
                     return new T(std::forward<Args>(args)...);
                 }
-                if (freed.empty())
+                if (freed.empty()) [[unlikely]]
+                {
+                    for (size_t i = 0; i < batch_size; ++i)
+                    {
+                        freed.push(static_cast<T*>(::operator new(sizeof(T))));
+                    }
                     return new T(std::forward<Args>(args)...);
-                else
+                }
+                else [[likely]]
                 {
                     T* ptr = freed.top();
                     freed.pop();

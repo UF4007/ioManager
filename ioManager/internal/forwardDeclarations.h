@@ -20,7 +20,7 @@
 																	template <typename FSM_Index2, typename FSM_In2, typename FSM_Out2>friend struct io::rpc;\
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------
-template <typename T>struct hive;
+template <typename T, size_t batch_size>struct hive;
 template <typename T>struct skip_table;
 template <typename T, size_t capacity> struct forward_fifo;
 template <typename _Struc> class dualbuf;
