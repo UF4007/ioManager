@@ -1666,7 +1666,7 @@ namespace io
                 manager* target_manager = &(threadsInPool[next_thread % threadsInPool.size()].mngr);
                 next_thread++;
                 
-                target_manager->spawn_later(std::move(new_fsm));
+                target_manager->async_spawn(std::move(new_fsm));
             }
             
             /**
