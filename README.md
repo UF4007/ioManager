@@ -123,6 +123,7 @@ io::fsm_func<void> parent_coroutine()
 The difference between `spawn_now` and `getManager()->spawn_later`:
 - `spawn_now`: Starts the coroutine immediately
 - `getManager()->spawn_later`: Queues the coroutine for later execution
+- `getManager()->async_spawn`: queue and automatically detach
 
 ### Using Delays
 
@@ -215,8 +216,8 @@ io::fsm_func<void> lifetime_example()
 
 > **Important Notes:**
 > - When a `fsm_handle` is destroyed without being detached, the corresponding coroutine is also destroyed.
-> - Detached coroutines continue running until they complete or the manager is destroyed.
 > - The FSM context (`io::fsm<T>&`) is only valid within the coroutine that obtained it.
+> - `fsm_handle` is not thread-safe at all. Do not use it for any multi-threaded operation.
 
 ## Future/Promise: Coroutine Communication
 

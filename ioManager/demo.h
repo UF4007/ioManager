@@ -118,7 +118,7 @@ io::fsm_func<void> coro_async_chan(std::atomic<size_t> *count, std::atomic<size_
 
     // Launch multiple producers
     for (int i = 0; i < PRODUCERS; ++i) {
-        thread_pool.spawn_later([](io::async::chan<char> ch, io::async::semaphore stop_singal) -> io::fsm_func<void> {
+        thread_pool.async_spawn([](io::async::chan<char> ch, io::async::semaphore stop_singal) -> io::fsm_func<void> {
             io::fsm<void>& fsm = co_await io::get_fsm;
             ch.setManager(fsm.getManager());
             char send[] = "this is a very long long string for async channel test.";
@@ -130,12 +130,12 @@ io::fsm_func<void> coro_async_chan(std::atomic<size_t> *count, std::atomic<size_
             }
             stop_singal.release();
             co_return;
-        }(chan, stop_singal)).detach();
+        }(chan, stop_singal));
     }
 
     // Launch multiple consumers
     for (int i = 0; i < CONSUMERS; ++i) {
-        thread_pool.spawn_later([](io::async::chan<char> ch, io::async::semaphore stop_singal, std::atomic<size_t>* count, std::atomic<size_t>* throughput) -> io::fsm_func<void> {
+        thread_pool.async_spawn([](io::async::chan<char> ch, io::async::semaphore stop_singal, std::atomic<size_t>* count, std::atomic<size_t>* throughput) -> io::fsm_func<void> {
             io::fsm<void>& fsm = co_await io::get_fsm;
             ch.setManager(fsm.getManager());
             std::string str;
@@ -158,7 +158,7 @@ io::fsm_func<void> coro_async_chan(std::atomic<size_t> *count, std::atomic<size_
             }
             stop_singal.release();
             co_return;
-        }(chan, stop_singal, count, throughput)).detach();
+        }(chan, stop_singal, count, throughput));
     }
 
     io::future block_forever;
@@ -1528,81 +1528,81 @@ void io_testmain_v3()
 
     // test of basic coroutine method
     if (false)
-        mngr.spawn_later(coro_demo(100)).detach();
+        mngr.async_spawn(coro_demo(100));
 
     // limit test
     if (false)
-        mngr.spawn_later(coro_limit_test(10000000)).detach();
+        mngr.async_spawn(coro_limit_test(10000000));
 
     // test of chan
     if (false)
     {
         if (true)
-            mngr.spawn_later(coro_chan_benchmark()).detach();
+            mngr.async_spawn(coro_chan_benchmark());
         else
-            mngr.spawn_later(coro_chan(nullptr, nullptr)).detach();
+            mngr.async_spawn(coro_chan(nullptr, nullptr));
     }
 
     // test of async_chan
     if (false)
     {
         if (true)
-            mngr.spawn_later(coro_async_chan_benchmark()).detach();
+            mngr.async_spawn(coro_async_chan_benchmark());
         else
-            mngr.spawn_later(coro_async_chan(nullptr, nullptr, 4)).detach();
+            mngr.async_spawn(coro_async_chan(nullptr, nullptr, 4));
     }
 
     // construction correctness test for chan
     if (false)
-        mngr.spawn_later(coro_chan_construct_correct_test()).detach();
+        mngr.async_spawn(coro_chan_construct_correct_test());
     
     // peak shaving demo with chan
     if (false)
-        mngr.spawn_later(coro_chan_peak_shaving()).detach();
+        mngr.async_spawn(coro_chan_peak_shaving());
         
     // coroutine benchmark
     if (true)
-        mngr.spawn_later(coro_benchmark()).detach();
+        mngr.async_spawn(coro_benchmark());
 
     // compensated timer test
     if (false)
-        mngr.spawn_later(coro_down_timer()).detach();
+        mngr.async_spawn(coro_down_timer());
 
     // tcp echo server
     if (false)
-        mngr.spawn_later(coro_tcp_echo_server()).detach();
+        mngr.async_spawn(coro_tcp_echo_server());
 
     // tcp echo client
     if (false)
-        mngr.spawn_later(coro_tcp_echo_client()).detach();
+        mngr.async_spawn(coro_tcp_echo_client());
 
     // tcp throughput test
     if (false)
-        mngr.spawn_later(coro_tcp_throughput_test()).detach();
+        mngr.async_spawn(coro_tcp_throughput_test());
 
     // tcp concurrent connections test
     if (false)
-        mngr.spawn_later(coro_tcp_concurrent_connections_test()).detach();
+        mngr.async_spawn(coro_tcp_concurrent_connections_test());
 
     // udp echo
     if (false)
-        mngr.spawn_later(coro_udp_echo()).detach();
+        mngr.async_spawn(coro_udp_echo());
 
     // udp echo with adapter
     if (false)
-        mngr.spawn_later(coro_udp_echo_with_adapter()).detach();
+        mngr.async_spawn(coro_udp_echo_with_adapter());
 
     // pipeline
     if (false)
-        mngr.spawn_later(coro_pipeline_test()).detach();
+        mngr.async_spawn(coro_pipeline_test());
 
     // http rpc demo
     if (false)
-        mngr.spawn_later(coro_http_rpc_demo()).detach();
+        mngr.async_spawn(coro_http_rpc_demo());
 
     // thread pool test
     if (false)
-        mngr.spawn_later(coro_thread_pool_test()).detach();
+        mngr.async_spawn(coro_thread_pool_test());
 
     while (1)
     {

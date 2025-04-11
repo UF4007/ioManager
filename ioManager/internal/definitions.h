@@ -22,14 +22,6 @@ inline void io::lowlevel::awaiter::queue_in(await_queue* queue)
 template <typename T_spawn>
 [[nodiscard]] inline io::fsm_handle<T_spawn> io::lowlevel::fsm_base::spawn_now(fsm_func<T_spawn> new_fsm)
 {
-    if constexpr (io::is_future_with<T_spawn>::value)
-    {
-        this->mngr->make_future(new_fsm._data->_fsm._data, &new_fsm._data->_fsm._data.data);
-    }
-    else if constexpr (io::is_future<T_spawn>::value)
-    {
-        this->mngr->make_future(new_fsm._data->_fsm._data);
-    }
     new_fsm._data->_fsm.mngr = this->mngr;
     std::coroutine_handle<fsm_promise<T_spawn>> h;
     h = h.from_promise(*new_fsm._data);

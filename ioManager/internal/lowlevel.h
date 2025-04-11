@@ -165,6 +165,25 @@ class lowlevel {
         std::coroutine_handle<>* ptr;
         bool* simple_awaiter;
     };
+    template <typename T_spawn>
+    struct awa_initial_suspend {
+        io::fsm<T_spawn>* _pthis;
+        inline awa_initial_suspend(io::fsm<T_spawn>* pthis):_pthis(pthis){}
+        constexpr bool await_ready() const noexcept {
+            return false;
+        }
+        constexpr void await_suspend(std::coroutine_handle<>) const noexcept {}
+        constexpr void await_resume() const noexcept {
+            if constexpr (io::is_future_with<T_spawn>::value)
+            {
+                _pthis->mngr->make_future(_pthis->_data, &_pthis->_data.data);
+            }
+            else if constexpr (io::is_future<T_spawn>::value)
+            {
+                _pthis->mngr->make_future(_pthis->_data);
+            }
+        }
+    };
     enum class selector_status {
         //not_await = 0,      //condition has been fulfilled. not await.
         all = 1,            //all resolve or any reject

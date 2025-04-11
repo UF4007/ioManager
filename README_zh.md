@@ -106,6 +106,7 @@ io::fsm_func<void> parent_coroutine()
 `spawn_now`和`getManager()->spawn_later`的区别：
 - `spawn_now`：立即启动协程
 - `getManager()->spawn_later`：将协程排队等待稍后执行
+- `getManager()->async_spawn`：异步排队，并自动detach
 
 ### 延时
 
@@ -196,8 +197,8 @@ io::fsm_func<void> lifetime_example()
 
 > **重要提示：**
 > - 当`fsm_handle`在未分离的情况下被销毁时，相应的协程也会被销毁。
-> - 分离的协程会继续运行，直到它们完成或管理器被销毁。
 > - FSM上下文（`io::fsm<T>&`）仅在获取它的协程内有效。
+> - `fsm_handle`完全不是线程安全的。不要用于任何多线程操作。
 
 ## Future/Promise：协程通信
 

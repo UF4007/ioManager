@@ -505,6 +505,15 @@ namespace io
             char* _owned;          // Whether this buffer owns the memory
         };
 
+        template<typename>
+        struct is_future_with : std::false_type {};
+
+        template<typename U>
+        struct is_future_with<io::future_with<U>> : std::true_type {};
+
+        template<typename T>
+        struct is_future { static constexpr bool value = (io::is_future_with<T>::value || std::is_same_v<T, io::future>); };
+
         // -------------------------------coroutine core--------------------------------
 
 #include "internal/lowlevel.h"
@@ -902,15 +911,6 @@ namespace io
             defer_t& operator=(defer_t&&) = default;
         };
 
-        template<typename>
-        struct is_future_with : std::false_type {};
-
-        template<typename U>
-        struct is_future_with<io::future_with<U>> : std::true_type {};
-
-        template<typename T>
-        struct is_future { static constexpr bool value = (io::is_future_with<T>::value || std::is_same_v<T, io::future>); };
-
         // finite-state machine function literally return type
         template <typename T>
             requires (std::is_same_v<T, void> || std::is_default_constructible_v<T>)
@@ -967,7 +967,7 @@ namespace io
                 inline lowlevel::awaitable_base<T, lowlevel::selector_status::allsettle, Args...> await_transform(lowlevel::allSettle<Args...>&& x) {
                     return lowlevel::awaitable_base<T, lowlevel::selector_status::allsettle, Args...>(*this, x.il);
                 }
-                inline std::suspend_always initial_suspend() { return {}; }
+                inline lowlevel::awa_initial_suspend<T> initial_suspend() { return lowlevel::awa_initial_suspend<T>(&_fsm); }
                 inline std::suspend_always final_suspend() noexcept { return {}; }
                 inline void unhandled_exception() {
                     std::terminate();
@@ -1378,7 +1378,7 @@ namespace io
             }
 #endif
             
-            // async co_spawn, coroutine will be run by the caller manager next turn.
+            // spawn coroutine in same thread, coroutine will be run by the caller manager next turn.
             template <typename T_spawn>
             [[nodiscard]] inline fsm_handle<T_spawn> spawn_later(fsm_func<T_spawn> new_fsm) {
                 new_fsm._data->_fsm.mngr = this;
@@ -1393,16 +1393,23 @@ namespace io
                 
                 this->suspend_release();
 
-                if constexpr (io::is_future_with<T_spawn>::value)
-                {
-                    this->make_future(new_fsm._data->_fsm._data, &new_fsm._data->_fsm._data.data);
-                }
-                else if constexpr (io::is_future<T_spawn>::value)
-                {
-                    this->make_future(new_fsm._data->_fsm._data);
-                }
-
                 return { new_fsm._data };
+            }
+            // async co_spawn, coroutine will be detached, and run by the caller manager next turn.
+            template <typename T_spawn>
+            inline void async_spawn(fsm_func<T_spawn> new_fsm) {
+                new_fsm._data->_fsm.is_detached = true;
+                new_fsm._data->_fsm.mngr = this;
+
+                while (spinLock_pd.test_and_set(std::memory_order_acquire));
+                std::coroutine_handle<fsm_promise<T_spawn>> h;
+                h = h.from_promise(*new_fsm._data);
+                std::coroutine_handle<> erased_handle;
+                erased_handle = h;
+                pendingTask.push(erased_handle);
+                spinLock_pd.clear(std::memory_order_release);
+
+                this->suspend_release();
             }
             // async wakeup
             void wakeup() {
@@ -1651,15 +1658,15 @@ namespace io
              * Spawns a coroutine to be executed on a thread in the pool
              */
             template <typename T_spawn>
-            inline fsm_handle<T_spawn> spawn_later(fsm_func<T_spawn> new_fsm) {
+            inline void async_spawn(fsm_func<T_spawn> new_fsm) {
                 if (threadsInPool.empty()) {
-                    return fsm_handle<T_spawn>{};
+                    return;
                 }
                 
                 manager* target_manager = &(threadsInPool[next_thread % threadsInPool.size()].mngr);
                 next_thread++;
                 
-                return target_manager->spawn_later(std::move(new_fsm));
+                target_manager->spawn_later(std::move(new_fsm));
             }
             
             /**
