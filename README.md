@@ -48,7 +48,6 @@ io::manager provides a comprehensive solution for building efficient, concurrent
 
 - [Finite State Machine (FSM): The Core of io::manager](#finite-state-machine-fsm-the-core-of-iomanager)
   - [Creating a Manager](#creating-a-manager)
-  - [Creating a Basic FSM Coroutine](#creating-a-basic-fsm-coroutine)
   - [Spawning and Managing Coroutines](#spawning-and-managing-coroutines)
   - [Using Delays](#using-delays)
   - [FSM with Associated Values](#fsm-with-associated-values)
@@ -269,7 +268,7 @@ io::fsm_func<void> consumer_coroutine(io::future fut)
 }
 ```
 
-> **Note:** After `prom.resolve()` is called, the promise become invalid and the future cannot be used for await operations. Must be reconstructed for reuse.
+> **Note:** After `prom.resolve()` is called, the promise become invalid and the future cannot be used for await operations. Must use the relative make() function for reuse.
 
 #### Passing Data with Future/Promise
 
