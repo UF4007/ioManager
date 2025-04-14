@@ -374,7 +374,7 @@ io::fsm_func<void> race_example()
         co_await fsm.setTimeout(std::chrono::seconds(1));
         prom.resolve();
         co_return;
-    }(std::move(prom1))).detach();
+    }(std::move(prom2))).detach();
     
     // 等待race结果
     co_await io::future::race(fut1, fut2);
