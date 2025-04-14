@@ -359,7 +359,7 @@ io::fsm_func<void> race_example()
     io::promise<void> prom1 = fsm.make_future(fut1);
     io::promise<void> prom2 = fsm.make_future(fut2);
     
-    // 并行启动两个操作
+    // 启动两个操作
     fsm.spawn_now([](io::promise<> prom) -> io::fsm_func<void> {
         io::fsm<void> &fsm = co_await io::get_fsm;
         // 模拟工作
