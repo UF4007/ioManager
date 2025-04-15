@@ -1376,6 +1376,9 @@ namespace io
                     asio::detached
                 );
             }
+
+            // Get io_context of this thread
+            asio::io_context& getAsioContext() { return io_ctx; }
 #endif
             
             // spawn coroutine in same thread, coroutine will be run by the caller manager next turn.
