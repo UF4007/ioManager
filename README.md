@@ -377,23 +377,23 @@ io::fsm_func<void> race_example()
     io::future fut1, fut2;
     io::promise<void> prom1 = fsm.make_future(fut1);
     io::promise<void> prom2 = fsm.make_future(fut2);
-    
-    // Start two operations in parallel
-    fsm.spawn_now([&prom1]() -> io::fsm_func<void> {
+
+    // Start two operations
+    fsm.spawn_now([](io::promise<> prom) -> io::fsm_func<void> {
         io::fsm<void> &fsm = co_await io::get_fsm;
         // Simulate work
         co_await fsm.setTimeout(std::chrono::seconds(2));
-        prom1.resolve();
+        prom.resolve();
         co_return;
-    }()).detach();
+    }(std::move(prom1))).detach();
     
-    fsm.spawn_now([&prom2]() -> io::fsm_func<void> {
+    fsm.spawn_now([](io::promise<> prom) -> io::fsm_func<void> {
         io::fsm<void> &fsm = co_await io::get_fsm;
         // Simulate work
         co_await fsm.setTimeout(std::chrono::seconds(1));
-        prom2.resolve();
+        prom.resolve();
         co_return;
-    }()).detach();
+    }(std::move(prom2))).detach();
     
     // Wait for the race result
     co_await io::future::race(fut1, fut2);
