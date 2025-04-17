@@ -102,48 +102,7 @@ namespace io
             static constexpr bool debug = false;
         };
 
-        //FIFO buffer. Multi-thread outbound, multi-thread inbound safety. Reentrancy safe. 
-        // UB: outbound and inbound in diff threads simultaneously.
-        // Its size will increase solely directionally until the buffer capacity has been fully occupied. Use clear to reset it.
-        template <typename T, size_t capacity>
-        struct forward_fifo {
-            //forward constructor of std::array
-            constexpr forward_fifo(std::initializer_list<T> init_list) {
-                std::copy(init_list.begin(), init_list.end(), _data.begin());
-            }
-            //inbound function.
-            // returns null when fifo full
-            // if size larger than remaining size, returns remaining size.
-            inline friend std::span<T> operator <<(forward_fifo& buffer, size_t size) {
-                size_t start = buffer.produced.fetch_add(size);
-                size_t end = start + size;
-                if (start >= capacity) {
-                    return {};
-                }
-                size_t available_size = capacity - start;
-                size_t actual_size = (end <= capacity) ? size : available_size;
-                return { buffer._data.data() + start, actual_size };
-            }
-            //outbound function
-            // if size larger than the read-valid size, returns valid size.
-            inline friend std::span<T> operator >>(forward_fifo& buffer, size_t size) {
-                size_t start = buffer.consumed.fetch_add(size);
-                size_t end = start + size;
-                if (start >= capacity) {
-                    return {};
-                }
-                size_t available_size = capacity - start;
-                size_t actual_size = (end <= capacity) ? size : available_size;
-                return { buffer._data.data() + start, actual_size };
-            }
-            inline void clear() { consumed = produced = 0; }
-        private:
-            std::array<T, capacity> _data;
-            std::atomic<size_t> produced = 0;
-            std::atomic<size_t> consumed = 0;
-        };
-
-        //dual buffer. Thread safe. Reentrancy safe. We don't need a ring buffer to handle multi-thread scenario
+        //dual buffer. Thread safe. Reentrancy safe.
         // Lock free structure.
         // When outbound_get returns not-nullptr, and the caller empties the obtained buffer, a rotate operation is recommended.
         template <typename _Struc>
@@ -226,91 +185,6 @@ namespace io
                     bufferLock[1].clear(std::memory_order_release);
                 }
             }
-        };
-
-        //ring buffer.
-        // Not Thread safe.
-        // UB: Visit a std::span that was got by the previous operator call after another operator call.
-        template<typename T, size_t N>
-        struct ringbuf {
-            //inbound function. get a continuous memory span.
-            // returns null when full.
-            // if the size is larger than the remaining size, return the remaining size.
-            inline friend std::span<T> operator<<(ringbuf& buf, size_t size) {
-                if (buf.is_full || size == 0) {
-                    return std::span<T>();
-                }
-
-                size_t avail_contiguous = 0;
-
-                if (buf.write_pos > buf.read_pos) {
-                    //split into 2 blocks. needs to call again next turn.
-                    avail_contiguous = N - buf.write_pos;
-                }
-                else if (buf.write_pos == buf.read_pos) {
-                    avail_contiguous = N - buf.write_pos;
-                }
-                else {
-                    //continuous memory.
-                    avail_contiguous = buf.read_pos - buf.write_pos;
-                }
-
-                size_t len = std::min(size, avail_contiguous);
-
-                std::span<T> result(buf.buffer.data() + buf.write_pos, len);
-                buf.write_pos += len;
-                if (buf.write_pos >= N) {
-                    buf.write_pos = 0;
-                }
-
-                buf.is_full = (buf.write_pos == buf.read_pos);
-
-                return result;
-            }
-
-            //outbound function. get a continuous memory span.
-            // returns null when vacancy.
-            // if the size is larger than the read-valid size, return the valid size.
-            inline friend std::span<T> operator>>(ringbuf& buf, size_t size) {
-                if ((buf.write_pos == buf.read_pos && !buf.is_full) || size == 0) {
-                    return std::span<T>();
-                }
-
-                size_t avail_contiguous = 0;
-
-                if (buf.read_pos > buf.write_pos) {
-                    //split into 2 blocks. needs to call again next turn.
-                    avail_contiguous = N - buf.read_pos;
-                }
-                else if (buf.read_pos == buf.write_pos && buf.is_full) {
-                    avail_contiguous = N - buf.read_pos;
-                }
-                else {
-                    //continuous memory.
-                    avail_contiguous = buf.write_pos - buf.read_pos;
-                }
-
-                size_t len = std::min(size, avail_contiguous);
-
-                std::span<T> result(buf.buffer.data() + buf.read_pos, len);
-                buf.read_pos += len;
-                if (buf.read_pos >= N) {
-                    buf.read_pos = 0;
-                }
-
-                buf.is_full = false;
-
-                return result;
-            }
-            //forward constructor of std::array
-            constexpr ringbuf(std::initializer_list<T> init_list) {
-                std::copy(init_list.begin(), init_list.end(), buffer.begin());
-            }
-        private:
-            std::array<T, N> buffer;
-            size_t write_pos = 0;
-            size_t read_pos = 0;
-            bool is_full = false;
         };
 
         // Buffer class that can own or reference memory pointer, move only.
