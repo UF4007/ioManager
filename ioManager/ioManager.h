@@ -25,6 +25,7 @@ namespace io
 
         //Generic memory pool for a single structure category. 
         // Not Thread safe.
+        // Simple benchmark result (50M operations, clang): 30% faster in random new/delete, 6% slower when sequence new/delete.
         template <typename T, size_t batch_size = 16>
         struct hive {
             explicit inline hive(size_t vacancy_limit = 100) :size_limit(vacancy_limit) {}
@@ -61,7 +62,7 @@ namespace io
                 if constexpr (std::is_destructible_v<T>)
                     ptr->~T();
                 freed.push(ptr);
-                if (freed.size() > size_limit)
+                if (freed.size() > size_limit) [[unlikely]]
                 {
                     size_t num_to_del = (size_t)(size_limit * erase_multiple);
                     while (num_to_del)

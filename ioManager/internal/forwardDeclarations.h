@@ -2,8 +2,8 @@
 																	template <typename _Struc2> friend class io::dualbuf;\
 																	friend class io::lowlevel;\
 																	friend struct io::future;\
-																	friend struct async_future;\
-																	friend struct async_promise;\
+																	friend struct io::async_future;\
+																	friend struct io::async_promise;\
 																	template <typename T2>requires (!std::is_same_v<T2, void>)friend struct io::future_with;\
 																	friend struct io::clock;\
 																	template <typename T2>friend struct io::promise;\

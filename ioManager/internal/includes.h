@@ -50,7 +50,9 @@
 #include "selectMarco.h"
 
 #if IO_USE_ASIO
+#define ASIO_HAS_CO_AWAIT 1
 //#include "../asio/asio.hpp"
+#include "../asio/asio/awaitable.hpp"
 #include "../asio/asio/buffer.hpp"
 #include "../asio/asio/io_context.hpp"
 #include "../asio/asio/io_context_strand.hpp"
