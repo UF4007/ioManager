@@ -1,5 +1,6 @@
 #pragma once
 #include "../../ioManager.h"
+#include "tcp.h"
 
 namespace io
 {
