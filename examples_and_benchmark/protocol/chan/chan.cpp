@@ -1,6 +1,3 @@
-#include <cstdio>
-#include <iostream>
-#include <string>
 #include <ioManager/ioManager.h>
 #include <ioManager/protocol/chan.h>
 

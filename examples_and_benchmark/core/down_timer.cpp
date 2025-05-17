@@ -1,5 +1,3 @@
-#include <cstdio>
-#include <iostream>
 #include <ioManager/ioManager.h>
 #include <ioManager/timer.h>
 

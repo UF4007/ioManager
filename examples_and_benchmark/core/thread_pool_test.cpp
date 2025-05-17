@@ -1,9 +1,5 @@
-#include <cstdio>
-#include <iostream>
-#include <vector>
-#include <thread>
-#include <chrono>
 #include <ioManager/ioManager.h>
+#include <ioManager/timer.h>
 
 io::fsm_func<void> thread_pool_test()
 {

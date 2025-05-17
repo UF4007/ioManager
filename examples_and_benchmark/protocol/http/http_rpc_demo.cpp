@@ -1,7 +1,8 @@
-#include <cstdio>
-#include <iostream>
-#include <string>
 #include <ioManager/ioManager.h>
+#include <ioManager/pipeline.h>
+#include <ioManager/rpc.h>
+#include <ioManager/socket/asio/tcp.h>
+#include <ioManager/socket/asio/tcp_accp.h>
 #include <ioManager/protocol/http/http.h>
 
 io::fsm_func<void> http_rpc_demo() {

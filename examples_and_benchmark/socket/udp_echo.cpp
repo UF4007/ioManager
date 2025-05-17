@@ -1,7 +1,6 @@
-#include <cstdio>
-#include <iostream>
 #include <ioManager/ioManager.h>
 #include <ioManager/socket/asio/udp.h>
+#include <ioManager/pipeline.h>
 
 io::fsm_func<void> udp_echo()
 {

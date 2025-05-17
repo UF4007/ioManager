@@ -1,10 +1,6 @@
-#include <cstdio>
-#include <iostream>
-#include <iomanip>
-#include <string>
-#include <atomic>
 #include <ioManager/ioManager.h>
 #include <ioManager/protocol/async_chan.h>
+#include <ioManager/protocol/async_semaphore.h>
 
 io::fsm_func<void> async_chan(std::atomic<size_t> *count, std::atomic<size_t>* throughput, size_t thread_pool_sum)
 {

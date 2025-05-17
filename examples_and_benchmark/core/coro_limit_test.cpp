@@ -1,5 +1,3 @@
-#include <cstdio>
-#include <iostream>
 #include <ioManager/ioManager.h>
 
 io::fsm_func<void> limit_test(int num)

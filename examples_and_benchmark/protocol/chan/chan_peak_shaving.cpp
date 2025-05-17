@@ -1,8 +1,8 @@
-#include <cstdio>
-#include <iostream>
-#include <chrono>
 #include <ioManager/ioManager.h>
+#include <ioManager/timer.h>
+#include <ioManager/pipeline.h>
 #include <ioManager/protocol/chan.h>
+#include <ioManager/protocol/async_chan.h>
 
 io::fsm_func<void> chan_peak_shaving()
 {
