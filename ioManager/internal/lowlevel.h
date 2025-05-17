@@ -216,7 +216,7 @@ class lowlevel {
                         return;
                     }
                 }
-                assert(false || !"awaiter mismatch!");
+                IO_ASSERT(false, "awaiter mismatch!");
             };
             auto whenAll = [&]()->bool {
                 when_all_count--;

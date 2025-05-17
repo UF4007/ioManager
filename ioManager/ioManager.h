@@ -200,7 +200,7 @@ namespace io
 
 			// Allocates memory with specified capacity
             explicit inline buf(size_t capacity) : data_ptr((char*)::operator new(capacity)), data_size(0), data_capacity(capacity), _owned(data_ptr) {
-                assert(capacity && "buf error: capacity must be larger than 0");
+                IO_ASSERT(capacity > 0, "buf error: capacity must be larger than 0");
             }
             
             // Explicit constructor from span (copies data)
@@ -208,7 +208,7 @@ namespace io
                 : data_size(span.size()), data_capacity(capacity == 0 ? span.size() : capacity)
             {
                 if (capacity > 0 && capacity < span.size()) {
-                    assert(!"Buf ERROR: Capacity cannot be smaller than span size");
+                    IO_ASSERT(false, "Buf ERROR: Capacity cannot be smaller than span size");
                 }
                 
                 data_ptr = static_cast<char *>(::operator new(data_capacity));
@@ -225,7 +225,7 @@ namespace io
                 _owned(data_ptr)
             {
                 if (capacity > 0 && capacity < init_list.size()) {
-                    assert(!"Buf ERROR: Capacity cannot be smaller than span size");
+                    IO_ASSERT(false, "Buf ERROR: Capacity cannot be smaller than span size");
                 }
 
                 std::copy(init_list.begin(), init_list.end(), data_ptr);
@@ -336,36 +336,36 @@ namespace io
             }
 
 			inline void resize(size_t new_size) {
-				assert(new_size <= data_capacity && "Buffer overflow: resize would exceed capacity");
+				IO_ASSERT(new_size <= data_capacity, "Buffer overflow: resize would exceed capacity");
 				data_size = new_size;
 			}
 
             inline size_t size_increase(size_t size_inc) {
-                assert(data_size + size_inc <= data_capacity && "Buffer overflow: size_increase would exceed capacity");
+                IO_ASSERT(data_size + size_inc <= data_capacity, "Buffer overflow: size_increase would exceed capacity");
                 data_size += size_inc;
                 return data_size;
             }
 
 			inline size_t size_decrease(size_t size_dec) {
-                assert(size_dec <= data_size && "Buffer underflow: size_decrease would result in negative size");
+                IO_ASSERT(size_dec <= data_size, "Buffer underflow: size_decrease would result in negative size");
 				data_size -= size_dec;
 				return data_size;
 			}
 
 			inline void data_increase(size_t data_inc) {
-                assert(_owned && "This function must own this buffer memory.");
-                assert(data_inc <= data_size && "Buffer overflow: size_increase would exceed capacity");
+                IO_ASSERT(_owned, "This function must own this buffer memory.");
+                IO_ASSERT(data_inc <= data_size, "Buffer overflow: size_increase would exceed capacity");
 				data_size -= data_inc;
                 data_capacity -= data_inc;
                 data_ptr += data_inc;
 			}
 
 			inline void data_decrease(size_t data_dec) {
-                assert(_owned && "This function must own this buffer memory.");
+                IO_ASSERT(_owned, "This function must own this buffer memory.");
 				data_size += data_dec;
 				data_capacity += data_dec;
                 data_ptr -= data_dec;
-                assert(_owned <= data_ptr && "Buffer underflow: size_decrease would result in negative size");
+                IO_ASSERT(_owned <= data_ptr, "Buffer underflow: size_decrease would result in negative size");
 			}
             
             // Add operator bool to check if the buffer is valid
@@ -407,7 +407,7 @@ namespace io
                 coro.resume();
             }
             inline ~awaitable() {
-                assert(coro == nullptr || !"Awaitable ERROR: resource leak detected.");
+                //IO_ASSERT(coro == nullptr, "Awaitable ERROR: resource leak detected.");
             }
             inline awaitable() {}
             awaitable(const awaitable&) = delete;
@@ -813,19 +813,19 @@ namespace io
                     return lowlevel::awaitable_base<T, lowlevel::selector_status::all, future>(*this, { fut.awaiter });
                 }
                 inline lowlevel::awa_awaitable await_transform(awaitable& x) {
-                    assert(x.operator bool() == false || !"repeatly co_await in same object!");
+                    IO_ASSERT(x.operator bool() == false, "repeatly co_await in same object!");
                     return { &x.coro, &_fsm.is_awaiting };
                 }
                 template <typename T_Fut>
                     requires std::is_convertible_v<T_Fut&, io::future&>
                 inline lowlevel::awaitable_base<T, lowlevel::selector_status::all, T_Fut> await_transform(T_Fut& x) {
-                    assert(static_cast<future&>(x).awaiter->coro == nullptr || !"await ERROR: future is not clean: being co_awaited by another coroutine, or not processed by make_future function.");
+                    IO_ASSERT(static_cast<future&>(x).awaiter->coro == nullptr, "await ERROR: future is not clean: being co_awaited by another coroutine, or not processed by make_future function.");
                     return lowlevel::awaitable_base<T, lowlevel::selector_status::all, T_Fut>(*this, { static_cast<future&>(x).awaiter });
                 }
                 template <typename T_Fut>
                     requires std::is_convertible_v<T_Fut&, io::future&>
                 inline lowlevel::awaitable_base<T, lowlevel::selector_status::all, T_Fut> await_transform(T_Fut&& x) {
-                    assert(static_cast<future&&>(x).awaiter->coro == nullptr || !"await ERROR: future is not clean: being co_awaited by another coroutine, or not processed by make_future function.");
+                    IO_ASSERT(static_cast<future&&>(x).awaiter->coro == nullptr, "await ERROR: future is not clean: being co_awaited by another coroutine, or not processed by make_future function.");
                     static_cast<future&&>(x).awaiter->coro = (std::function<void(lowlevel::awaiter*)>*)1;
                     return lowlevel::awaitable_base<T, lowlevel::selector_status::all, T_Fut>(*this, { static_cast<future&&>(x).awaiter });
                 }
@@ -1972,7 +1972,7 @@ namespace io
                             turn = 0;
                         }
                         else {
-                            assert(!"pipeline ERROR: unexcepted turn clock!");
+                            IO_ASSERT(false, "pipeline ERROR: unexcepted turn clock!");
                         }
                     }
                     else if constexpr (trait::is_output_prot_gen<std::remove_reference_t<Front>>::await) {
@@ -1998,7 +1998,7 @@ namespace io
                             turn = 0;
                         }
                         else {
-                            assert(!"pipeline ERROR: unexcepted turn clock!");
+                            IO_ASSERT(false, "pipeline ERROR: unexcepted turn clock!");
                         }
                     }
                     else if constexpr (trait::is_input_prot<std::remove_reference_t<Rear>, typename trait::is_output_prot_gen<std::remove_reference_t<Front>>::prot_output_type, Adaptor>::await) {
@@ -2012,7 +2012,7 @@ namespace io
                             turn = 2;
                         }
                         else {
-                            assert(!"pipeline ERROR: unexcepted turn clock!");
+                            IO_ASSERT(false, "pipeline ERROR: unexcepted turn clock!");
                         }
                     }
                 }
@@ -2021,7 +2021,7 @@ namespace io
                         front.process(which, errorHandler);
                     }
                     else {
-                        assert(!"pipeline ERROR: unexcepted pipeline num!");
+                        IO_ASSERT(false, "pipeline ERROR: unexcepted pipeline num!");
                     }
                 }
             }
@@ -2049,7 +2049,7 @@ namespace io
                         futures[index++] = std::addressof(rear_future);
                     }
                     else {
-                        assert(!"pipeline ERROR: unexcepted turn clock!");
+                        IO_ASSERT(false, "pipeline ERROR: unexcepted turn clock!");
                     }
                 } else if constexpr (trait::is_output_prot_gen<std::remove_reference_t<Front>>::await) {
                     if (turn == 0) {
@@ -2065,7 +2065,7 @@ namespace io
                         futures[index++] = std::addressof(front_future);
                     }
                     else {
-                        assert(!"pipeline ERROR: unexcepted turn clock!");
+                        IO_ASSERT(false, "pipeline ERROR: unexcepted turn clock!");
                     }
                 } else if constexpr (trait::is_input_prot<std::remove_reference_t<Rear>, typename trait::is_output_prot_gen<std::remove_reference_t<Front>>::prot_output_type, Adaptor>::await) {
                     if (turn == 0 || turn == 2) {
@@ -2102,7 +2102,7 @@ namespace io
                         futures[index++] = std::addressof(rear_future);
                     }
                     else {
-                        assert(!"pipeline ERROR: unexcepted turn clock!");
+                        IO_ASSERT(false, "pipeline ERROR: unexcepted turn clock!");
                     }
                 }
                 else {
@@ -2336,7 +2336,7 @@ namespace io
                 } else if (default_handler_) {
                     return default_handler_(std::forward<R>(rsp_));
                 } else {
-                    assert(!"rpc ERROR: No handler found for key and no default handler provided");
+                    IO_ASSERT(false, "rpc ERROR: No handler found for key and no default handler provided");
                     return it->second(std::forward<R>(rsp_));
                 }
             }

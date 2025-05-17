@@ -13,6 +13,12 @@
 #define IO_THROW(content) abort();
 #endif
 
+#define IO_ASSERT(___condition, ___content)                                    \
+  do {                                                                         \
+    if (!(___condition))                                                       \
+      IO_THROW(___content);                                                    \
+  } while (0)   
+
 #ifndef IO_USE_ASIO
 #define IO_USE_ASIO 1
 #endif
