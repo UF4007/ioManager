@@ -40,18 +40,18 @@ namespace io {
 
             // Call operator to invoke the appropriate handler
             template <typename K, typename R>
-            inline response_type operator()(K&& req_, R&& rsp_) {
-                auto it = handlers_.find(std::forward<K>(req_));
+            inline response_type operator()(K&& key_, R&& req_) {
+                auto it = handlers_.find(std::forward<K>(key_));
                 if (it != handlers_.end()) {
-                    return it->second(std::forward<R>(rsp_));
+                    return it->second(std::forward<R>(req_));
                 }
                 else if (default_handler_) {
-                    return default_handler_(std::forward<R>(rsp_));
+                    return default_handler_(std::forward<R>(req_));
                 }
                 else {
                     IO_ASSERT(false, "rpc ERROR: No handler found for key and no default "
                         "handler provided");
-                    return it->second(std::forward<R>(rsp_));
+                    return it->second(std::forward<R>(req_));
                 }
             }
 
