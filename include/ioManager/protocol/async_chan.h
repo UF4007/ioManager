@@ -123,6 +123,7 @@ namespace io {
                             // If we fully consumed the segment, free memory and resolve promise
                             if (toRead == availableInSegment) {
                                 current->prom.resolve();
+                                current->~segment();
                                 ::operator delete(current);
                             }
                             else {
@@ -289,7 +290,7 @@ namespace io {
                     }
 
                     // Allocate memory for segment and data
-                    size_t dataSize = sizeof(segment) + numT;
+                    size_t dataSize = sizeof(segment) + numT * sizeof(T);
                     void* memory = ::operator new(dataSize);
                     segment* seg = new (memory) segment();
 
