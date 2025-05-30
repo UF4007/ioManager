@@ -50,7 +50,7 @@ io::fsm_func<void> chan_benchmark()
     const double NANOSECONDS_PER_SECOND = 1e9;
     double nanoseconds_per_operation = NANOSECONDS_PER_SECOND / exchange_per_second / 2;
 
-    std::cout << "Async Channel Test Results:" << std::endl;
+    std::cout << "Sync Channel Test Results:" << std::endl;
     std::cout << "Total data transmitted in " << TEST_SECONDS << " seconds: " << std::fixed << std::setprecision(2)
         << mb_total << " MB" << std::endl;
     std::cout << "Average throughput: " << mb_per_second << " MB/s" << std::endl;
