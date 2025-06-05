@@ -212,7 +212,7 @@ io::fsm_func<void> lifetime_example()
 
 ## Future/Promise：协程通信
 
-[查看future-promise对内存模型](./document/README_Memory_zh.md#1-futurepromise对)
+[查看future-promise对内存模型](./document/README_Memory_zh.md#1-future%2Fpromise对)
 
 这种模式类似于JavaScript的Promise系统，但针对C++协程进行了优化。
 
@@ -399,7 +399,7 @@ io::fsm_func<void> race_example()
 
 ### 多线程：async_future/async_promise
 
-[查看异步future-promise对内存模型](./document/README_Memory_zh.md#2-async_futureasync_promise对)
+[查看异步future-promise对内存模型](./document/README_Memory_zh.md#2-async_future%2Fasync_promise对)
 
 ```cpp
 io::fsm_func<void> async_operation()
@@ -496,7 +496,7 @@ io::fsm_func<void> use_future_coroutines()
 ## chan与async::chan：高性能协程/线程通信通道
 
 [查看chan内存模型](./document/README_Memory_zh.md#3-chan)
-[查看async::chan内存模型](./document/README_Memory_zh.md#4-async::chan)
+[查看async::chan内存模型](./document/README_Memory_zh.md#4-async_chan)
 
 类似 Golang 的 chan。内部有一个智能指针指向实际的chan控制块。
 
