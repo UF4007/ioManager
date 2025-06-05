@@ -212,6 +212,8 @@ io::fsm_func<void> lifetime_example()
 
 ## Future/Promise：协程通信
 
+[查看future-promise对内存模型](./document/README_Memory_zh.md#1-futurepromise对内存模型)
+
 这种模式类似于JavaScript的Promise系统，但针对C++协程进行了优化。
 
 ### 创建和使用Future/Promise对
@@ -397,6 +399,8 @@ io::fsm_func<void> race_example()
 
 ### 多线程：async_future/async_promise
 
+[查看异步future-promise对内存模型](./document/README_Memory_zh.md#2-async_futureasync_promise对内存模型)
+
 ```cpp
 io::fsm_func<void> async_operation()
 {
@@ -490,6 +494,9 @@ io::fsm_func<void> use_future_coroutines()
 ```
 
 ## chan与async::chan：高性能协程/线程通信通道
+
+[查看chan内存模型](./document/README_Memory_zh.md#3-chan内存模型)
+[查看async::chan内存模型](./document/README_Memory_zh.md#4-async::chan内存模型)
 
 类似 Golang 的 chan。内部有一个智能指针指向实际的chan控制块。
 
@@ -597,6 +604,8 @@ struct my_protocol {
 ```
 
 ### 管线机制
+
+[查看管线机制内存模型](./document/README_Memory_zh.md#5-管线机制内存模型)
 
 管线其实就是把所有协议组成一个个出-入对（管线段），并且统一在某个协程中平行处理。
 
