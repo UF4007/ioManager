@@ -233,6 +233,8 @@ io::fsm_func<void> lifetime_example()
 
 ## Future/Promise: Coroutine Communication
 
+[See memory model for this section](./document/README_Memory_en.md#1-futurepromise-pair)
+
 The future/promise pattern in io::manager provides a powerful way for coroutines to communicate and synchronize with each other. This pattern is similar to JavaScript's Promise system but optimized for C++ coroutines.
 
 ### Creating and Using Future/Promise Pairs
@@ -418,6 +420,8 @@ io::fsm_func<void> race_example()
 
 ### Multi-thread Resolution with async_future/async_promise
 
+[See memory model for this section](./document/README_Memory_en.md#2-async_future-async_promise-pair)
+
 For operations that may complete asynchronously (especially from other threads), use async_future/async_promise:
 
 ```cpp
@@ -513,6 +517,9 @@ io::fsm_func<void> use_future_coroutines()
 ```
 
 ## chan and async::chan: High-Performance Coroutine/Thread Communication Channels
+
+[See chan memory model](./document/README_Memory_en.md#3-chan)
+[See async::chan memory model](./document/README_Memory_en.md#4-async_chan)
 
 Similar to Golang's chan. There is a smart pointer inside that points to a chan control block.
 
@@ -620,6 +627,8 @@ struct my_protocol {
 ```
 
 ### Pipeline Mechanism
+
+[See memory model for this section](./document/README_Memory_en.md#5-Pipeline)
 
 The pipeline actually groups all protocols into output-input pairs (pipeline segments) and processes them in a specific coroutine.
 
