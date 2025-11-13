@@ -440,23 +440,38 @@ namespace io
             __IO_INTERNAL_HEADER_PERMISSION;
             template<typename... Args>
                 requires MultipleFuturesConvertible<Args...>
-            static inline lowlevel::all<Args...> all(Args&&... args) {
-                return lowlevel::all<Args...>(std::forward<Args>(args)...);
+            static inline lowlevel::all<false, Args...> all(Args&&... args) {
+                return lowlevel::all<false, Args...>(std::forward<Args>(args)...);
             }
             template<typename... Args>
                 requires MultipleFuturesConvertible<Args...>
-            static inline lowlevel::any<Args...> any(Args&&... args) {
-                return lowlevel::any<Args...>(std::forward<Args>(args)...);
+            static inline lowlevel::any<false, Args...> any(Args&&... args) {
+                return lowlevel::any<false, Args...>(std::forward<Args>(args)...);
             }
             template<typename... Args>
                 requires MultipleFuturesConvertible<Args...>
-            static inline lowlevel::race<Args...> race(Args&&... args) {
-                return lowlevel::race<Args...>(std::forward<Args>(args)...);
+            static inline lowlevel::race<false, Args...> race(Args&&... args) {
+                return lowlevel::race<false, Args...>(std::forward<Args>(args)...);
             }
             template<typename... Args>
                 requires MultipleFuturesConvertible<Args...>
-            static inline lowlevel::allSettle<Args...> allSettle(Args&&... args) {
-                return lowlevel::allSettle<Args...>(std::forward<Args>(args)...);
+            static inline lowlevel::allSettle<false, Args...> allSettle(Args&&... args) {
+                return lowlevel::allSettle<false, Args...>(std::forward<Args>(args)...);
+            }
+            template<typename... Args>
+                requires MultipleFuturesConvertible<Args...>
+            static inline lowlevel::all<true, Args...> all_index(Args&&... args) {
+                return lowlevel::all<true, Args...>(std::forward<Args>(args)...);
+            }
+            template<typename... Args>
+                requires MultipleFuturesConvertible<Args...>
+            static inline lowlevel::any<true, Args...> any_index(Args&&... args) {
+                return lowlevel::any<true, Args...>(std::forward<Args>(args)...);
+            }
+            template<typename... Args>
+                requires (FutureConvertible<Args> && ...)
+            static inline lowlevel::race<true, Args...> race_index(Args&&... args) {
+                return lowlevel::race<true, Args...>(std::forward<Args>(args)...);
             }
             inline future() {}
             future(const future&) = delete;
@@ -516,6 +531,20 @@ namespace io
             future(clock&&) = delete;
             lowlevel::awaiter* awaiter = nullptr;
             void decons() noexcept;
+        };
+
+        //combinator return value, designate which future was triggered in the future::race or so.
+        struct future_tag {
+            __IO_INTERNAL_HEADER_PERMISSION;
+            inline bool operator==(io::future &fut) { return fut.awaiter == this->awaiter; }
+            inline bool operator==(io::future_tag &fut) { return fut.awaiter == this->awaiter; }
+            inline operator bool() { return awaiter != nullptr; }
+            operator int() = delete;
+            future_tag(lowlevel::awaiter* awa) :awaiter(awa) {}
+            future_tag() {}
+        private:
+            //never use this pointer.
+            lowlevel::awaiter* awaiter = nullptr;
         };
 
         //future with data. Not moveable and copyable.
@@ -697,13 +726,13 @@ namespace io
                 inline get_fsm_awaitable await_transform(get_fsm_t x) {
                     return get_fsm_awaitable{};
                 }
-                inline lowlevel::awaitable_base<T, lowlevel::selector_status::all, future> await_transform(yield_t) {
+                inline lowlevel::awaitable_base<T, false, lowlevel::selector_status::all, future> await_transform(yield_t) {
                     future fut;
                     _fsm.make_future(fut);
                     fut.awaiter->no_tm.queue_next = _fsm.mngr->resolve_queue_local;
                     _fsm.mngr->resolve_queue_local = fut.awaiter;
                     fut.awaiter->coro = (std::function<void(lowlevel::awaiter*)>*)1;
-                    return lowlevel::awaitable_base<T, lowlevel::selector_status::all, future>(*this, { fut.awaiter });
+                    return lowlevel::awaitable_base<T, false, lowlevel::selector_status::all, future>(*this, { fut.awaiter });
                 }
                 inline lowlevel::awa_awaitable await_transform(awaitable& x) {
                     IO_ASSERT(x.operator bool() == false, "repeatly co_await in same object!");
@@ -711,32 +740,32 @@ namespace io
                 }
                 template <typename T_Fut>
                     requires std::is_convertible_v<T_Fut&, io::future&>
-                inline lowlevel::awaitable_base<T, lowlevel::selector_status::all, T_Fut> await_transform(T_Fut& x) {
+                inline lowlevel::awaitable_base<T, false, lowlevel::selector_status::all, T_Fut> await_transform(T_Fut& x) {
                     IO_ASSERT(static_cast<future&>(x).awaiter->coro == nullptr, "await ERROR: future is not clean: being co_awaited by another coroutine, or not processed by make_future function.");
-                    return lowlevel::awaitable_base<T, lowlevel::selector_status::all, T_Fut>(*this, { static_cast<future&>(x).awaiter });
+                    return lowlevel::awaitable_base<T, false, lowlevel::selector_status::all, T_Fut>(*this, { static_cast<future&>(x).awaiter });
                 }
                 template <typename T_Fut>
                     requires std::is_convertible_v<T_Fut&, io::future&>
-                inline lowlevel::awaitable_base<T, lowlevel::selector_status::all, T_Fut> await_transform(T_Fut&& x) {
+                inline lowlevel::awaitable_base<T, false, lowlevel::selector_status::all, T_Fut> await_transform(T_Fut&& x) {
                     IO_ASSERT(static_cast<future&&>(x).awaiter->coro == nullptr, "await ERROR: future is not clean: being co_awaited by another coroutine, or not processed by make_future function.");
                     static_cast<future&&>(x).awaiter->coro = (std::function<void(lowlevel::awaiter*)>*)1;
-                    return lowlevel::awaitable_base<T, lowlevel::selector_status::all, T_Fut>(*this, { static_cast<future&&>(x).awaiter });
+                    return lowlevel::awaitable_base<T, false, lowlevel::selector_status::all, T_Fut>(*this, { static_cast<future&&>(x).awaiter });
                 }
-                template <typename ...Args>
-                inline lowlevel::awaitable_base<T, lowlevel::selector_status::all, Args...> await_transform(lowlevel::all<Args...>&& x) {
-                    return lowlevel::awaitable_base<T, lowlevel::selector_status::all, Args...>(*this, x.il);
+                template <bool returnTypeAsIndex, typename ...Args>
+                inline lowlevel::awaitable_base<T, returnTypeAsIndex, lowlevel::selector_status::all, Args...> await_transform(lowlevel::all<returnTypeAsIndex, Args...>&& x) {
+                    return lowlevel::awaitable_base<T, returnTypeAsIndex, lowlevel::selector_status::all, Args...>(*this, x.il);
                 }
-                template <typename ...Args>
-                inline lowlevel::awaitable_base<T, lowlevel::selector_status::any, Args...> await_transform(lowlevel::any<Args...>&& x) {
-                    return lowlevel::awaitable_base<T, lowlevel::selector_status::any, Args...>(*this, x.il);
+                template <bool returnTypeAsIndex, typename ...Args>
+                inline lowlevel::awaitable_base<T, returnTypeAsIndex, lowlevel::selector_status::any, Args...> await_transform(lowlevel::any<returnTypeAsIndex, Args...>&& x) {
+                    return lowlevel::awaitable_base<T, returnTypeAsIndex, lowlevel::selector_status::any, Args...>(*this, x.il);
                 }
-                template <typename ...Args>
-                inline lowlevel::awaitable_base<T, lowlevel::selector_status::race, Args...> await_transform(lowlevel::race<Args...>&& x) {
-                    return lowlevel::awaitable_base<T, lowlevel::selector_status::race, Args...>(*this, std::move(x.il));
+                template <bool returnTypeAsIndex, typename ...Args>
+                inline lowlevel::awaitable_base<T, returnTypeAsIndex, lowlevel::selector_status::race, Args...> await_transform(lowlevel::race<returnTypeAsIndex, Args...>&& x) {
+                    return lowlevel::awaitable_base<T, returnTypeAsIndex, lowlevel::selector_status::race, Args...>(*this, std::move(x.il));
                 }
-                template <typename ...Args>
-                inline lowlevel::awaitable_base<T, lowlevel::selector_status::allsettle, Args...> await_transform(lowlevel::allSettle<Args...>&& x) {
-                    return lowlevel::awaitable_base<T, lowlevel::selector_status::allsettle, Args...>(*this, x.il);
+                template <bool returnTypeAsIndex, typename ...Args>
+                inline lowlevel::awaitable_base<T, returnTypeAsIndex, lowlevel::selector_status::allsettle, Args...> await_transform(lowlevel::allSettle<returnTypeAsIndex, Args...>&& x) {
+                    return lowlevel::awaitable_base<T, returnTypeAsIndex, lowlevel::selector_status::allsettle, Args...>(*this, x.il);
                 }
                 inline lowlevel::awa_initial_suspend<T> initial_suspend() { return lowlevel::awa_initial_suspend<T>(&_fsm); }
                 inline std::suspend_always final_suspend() noexcept { return {}; }
@@ -1212,7 +1241,7 @@ namespace io
                 fut.awaiter->bit_set |= fut.awaiter->is_clock;
                 if (isResolve)
                     fut.awaiter->bit_set |= fut.awaiter->clock_resolve;
-                std::memset(&fut.awaiter->tm, 0, sizeof(fut.awaiter->tm));
+                new (&fut.awaiter->tm) std::multimap<std::chrono::steady_clock::time_point, lowlevel::awaiter*>::iterator();
                 fut.awaiter->tm = this->time_chain.insert(
                     std::make_pair(
                         static_cast<std::chrono::steady_clock::time_point>(std::chrono::steady_clock::now() + duration),

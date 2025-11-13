@@ -111,10 +111,10 @@ namespace io {
                 await_get(futures, index);
                 if constexpr (pair_sum() == 1) {
                     future& ref = *futures[0];
-                    return ref;
+                    return future::race_index(ref);
                 }
                 else {
-                    return std::apply([](auto &&...args) { return future::race(*args...); },
+                    return std::apply([](auto &&...args) { return future::race_index(*args...); },
                         futures);
                 }
             }
