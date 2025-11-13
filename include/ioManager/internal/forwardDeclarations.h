@@ -2,6 +2,7 @@
 																	template <typename _Struc2> friend class io::dualbuf;\
 																	friend class io::lowlevel;\
 																	friend struct io::future;\
+																	friend struct io::future_tag;\
 																	friend struct io::async_future;\
 																	friend struct io::async_promise;\
 																	template <typename T2>requires (!std::is_same_v<T2, void>)friend struct io::future_with;\
@@ -24,6 +25,7 @@ template <typename T, size_t batch_size>struct hive;
 template <typename T>struct skip_table;
 template <typename T, size_t capacity> struct forward_fifo;
 template <typename _Struc> class dualbuf;
+struct future_tag;
 template<typename T>
 	requires (!std::is_same_v<T, void>)
 struct future_with;

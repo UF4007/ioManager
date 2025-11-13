@@ -194,12 +194,17 @@ class lowlevel {
         allsettle = 4       //all settle
     };
     //general future awaitable
-    template <typename T_FSM, selector_status status, typename ...Args>
+    template <typename T_FSM, bool returnTypeAsIndex, selector_status status, typename ...Args>
         requires (std::is_convertible_v<Args&, io::future&> && ...)
     struct awaitable_base {
         fsm_func<T_FSM>::promise_type& f_p;
-        uint32_t when_all_count;
-        int who;
+        union {
+            struct {
+                uint32_t when_all_count;
+                int which;
+            };
+            awaiter* who;
+        };
         std::array<awaiter*, sizeof...(Args)> await_arr;
 
         std::function<void(awaiter*)> coro_set; // lambda type erasure
@@ -212,7 +217,12 @@ class lowlevel {
                 {
                     if (std::memcmp(&await_arr[i], &awa, sizeof(this)) == 0)
                     {
-                        who = i;
+                        if constexpr (returnTypeAsIndex) {
+                            which = i;
+                        }
+                        else {
+                            who = awa;
+                        }
                         return;
                     }
                 }
@@ -222,7 +232,12 @@ class lowlevel {
                 when_all_count--;
                 if (when_all_count == 0)
                 {
-                    who = -1;
+                    if constexpr (returnTypeAsIndex) {
+                        which = -1;
+                    }
+                    else {
+                        who = nullptr;
+                    }
                     return true;
                 }
                 return false;
@@ -273,18 +288,14 @@ class lowlevel {
         awaitable_base(fsm_func<T_FSM>::promise_type& _fsm, std::array<awaiter*, sizeof...(Args)>&& il);
         inline bool await_ready() noexcept { return when_all_count == 0; }
         inline void await_suspend(std::coroutine_handle<> h) {}
-        inline int await_resume() noexcept requires (sizeof...(Args) == 1 && !(std::is_convertible_v<Args&, io::clock&> && ...)) {
-            return 0;
-        }
-        inline int await_resume() noexcept requires (sizeof...(Args) == 1 && (std::is_convertible_v<Args&, io::clock&> && ...)) {
-            return 0;
-        }
-        inline int await_resume() noexcept requires (sizeof...(Args) >= 2 && status == selector_status::allsettle) {
-            return -1;
-        }
-        inline int await_resume() noexcept requires (sizeof...(Args) >= 2 && status != selector_status::allsettle) {
-            return who;
-        }
+        inline future_tag await_resume() noexcept requires (!returnTypeAsIndex && sizeof...(Args) == 1 && !(std::is_convertible_v<Args&, io::clock&> && ...));
+        inline future_tag await_resume() noexcept requires (!returnTypeAsIndex && sizeof...(Args) == 1 && (std::is_convertible_v<Args&, io::clock&> && ...));
+        inline future_tag await_resume() noexcept requires (!returnTypeAsIndex && sizeof...(Args) >= 2 && status == selector_status::allsettle);
+        inline future_tag await_resume() noexcept requires (!returnTypeAsIndex && sizeof...(Args) >= 2 && status != selector_status::allsettle);
+        inline int await_resume() noexcept requires (returnTypeAsIndex && sizeof...(Args) == 1 && !(std::is_convertible_v<Args&, io::clock&> && ...));
+        inline int await_resume() noexcept requires (returnTypeAsIndex && sizeof...(Args) == 1 && (std::is_convertible_v<Args&, io::clock&> && ...));
+        inline int await_resume() noexcept requires (returnTypeAsIndex && sizeof...(Args) >= 2 && status == selector_status::allsettle);
+        inline int await_resume() noexcept requires (returnTypeAsIndex && sizeof...(Args) >= 2 && status != selector_status::allsettle);
         inline ~awaitable_base() {
             for (auto& awa : await_arr)
             {
@@ -336,7 +347,7 @@ class lowlevel {
     value_carrier(Args&&...) -> value_carrier<Args&&...>;
 
     //all resolve or any reject
-    template <typename ...Args>
+    template <bool returnTypeAsIndex, typename ...Args>
     struct all {
         __IO_INTERNAL_HEADER_PERMISSION
             inline all(Args&&... args) {
@@ -351,7 +362,7 @@ class lowlevel {
         std::array<lowlevel::awaiter*, sizeof...(Args)> il;
     };
     //any resolve or all reject
-    template <typename ...Args>
+    template <bool returnTypeAsIndex, typename ...Args>
     struct any {
         __IO_INTERNAL_HEADER_PERMISSION
             inline any(Args&&... args) {
@@ -366,7 +377,7 @@ class lowlevel {
         std::array<lowlevel::awaiter*, sizeof...(Args)> il;
     };
     //race the same as in a selector
-    template <typename ...Args>
+    template <bool returnTypeAsIndex, typename ...Args>
     struct race {
         __IO_INTERNAL_HEADER_PERMISSION
             inline race(Args&&... args) {
@@ -381,7 +392,7 @@ class lowlevel {
         std::array<lowlevel::awaiter*, sizeof...(Args)> il;
     };
     //all settle
-    template <typename ...Args>
+    template <bool returnTypeAsIndex, typename ...Args>
     struct allSettle {
         __IO_INTERNAL_HEADER_PERMISSION
             inline allSettle(Args&&... args) {

@@ -90,53 +90,53 @@ inline bool io::lowlevel::promise_base::reject_later(std::error_code ec) {
 
 
 //all any race allsettle
-template <typename ...Args>
-inline void io::lowlevel::all<Args...>::deploy(future& arg) {
+template <bool returnTypeAsIndex, typename ...Args>
+inline void io::lowlevel::all<returnTypeAsIndex, Args...>::deploy(future& arg) {
     assert(arg.awaiter->coro == nullptr || !"await ERROR: future is not clean: being co_awaited by another coroutine, or not processed by make_future function.");
     il[ind] = arg.awaiter;
     ind++;
 }
-template <typename ...Args>
-inline void io::lowlevel::all<Args...>::deploy(future&& arg) {
-    assert(arg.awaiter->coro == nullptr || !"await ERROR: future is not clean: being co_awaited by another coroutine, or not processed by make_future function.");
-    arg.awaiter->coro = (std::function<void(awaiter*)>*)1;    //hold the lifetime, prevent from deconstruct.
-    il[ind] = arg.awaiter;
-    ind++;
-}
-template <typename ...Args>
-inline void io::lowlevel::any<Args...>::deploy(future& arg) {
-    assert(arg.awaiter->coro == nullptr || !"await ERROR: future is not clean: being co_awaited by another coroutine, or not processed by make_future function.");
-    il[ind] = arg.awaiter;
-    ind++;
-}
-template <typename ...Args>
-inline void io::lowlevel::any<Args...>::deploy(future&& arg) {
+template <bool returnTypeAsIndex, typename ...Args>
+inline void io::lowlevel::all<returnTypeAsIndex, Args...>::deploy(future&& arg) {
     assert(arg.awaiter->coro == nullptr || !"await ERROR: future is not clean: being co_awaited by another coroutine, or not processed by make_future function.");
     arg.awaiter->coro = (std::function<void(awaiter*)>*)1;    //hold the lifetime, prevent from deconstruct.
     il[ind] = arg.awaiter;
     ind++;
 }
-template <typename ...Args>
-inline void io::lowlevel::race<Args...>::deploy(future& arg) {
+template <bool returnTypeAsIndex, typename ...Args>
+inline void io::lowlevel::any<returnTypeAsIndex, Args...>::deploy(future& arg) {
     assert(arg.awaiter->coro == nullptr || !"await ERROR: future is not clean: being co_awaited by another coroutine, or not processed by make_future function.");
     il[ind] = arg.awaiter;
     ind++;
 }
-template <typename ...Args>
-inline void io::lowlevel::race<Args...>::deploy(future&& arg) {
+template <bool returnTypeAsIndex, typename ...Args>
+inline void io::lowlevel::any<returnTypeAsIndex, Args...>::deploy(future&& arg) {
     assert(arg.awaiter->coro == nullptr || !"await ERROR: future is not clean: being co_awaited by another coroutine, or not processed by make_future function.");
     arg.awaiter->coro = (std::function<void(awaiter*)>*)1;    //hold the lifetime, prevent from deconstruct.
     il[ind] = arg.awaiter;
     ind++;
 }
-template <typename ...Args>
-inline void io::lowlevel::allSettle<Args...>::deploy(future& arg) {
+template <bool returnTypeAsIndex, typename ...Args>
+inline void io::lowlevel::race<returnTypeAsIndex, Args...>::deploy(future& arg) {
     assert(arg.awaiter->coro == nullptr || !"await ERROR: future is not clean: being co_awaited by another coroutine, or not processed by make_future function.");
     il[ind] = arg.awaiter;
     ind++;
 }
-template <typename ...Args>
-inline void io::lowlevel::allSettle<Args...>::deploy(future&& arg) {
+template <bool returnTypeAsIndex, typename ...Args>
+inline void io::lowlevel::race<returnTypeAsIndex, Args...>::deploy(future&& arg) {
+    assert(arg.awaiter->coro == nullptr || !"await ERROR: future is not clean: being co_awaited by another coroutine, or not processed by make_future function.");
+    arg.awaiter->coro = (std::function<void(awaiter*)>*)1;    //hold the lifetime, prevent from deconstruct.
+    il[ind] = arg.awaiter;
+    ind++;
+}
+template <bool returnTypeAsIndex, typename ...Args>
+inline void io::lowlevel::allSettle<returnTypeAsIndex, Args...>::deploy(future& arg) {
+    assert(arg.awaiter->coro == nullptr || !"await ERROR: future is not clean: being co_awaited by another coroutine, or not processed by make_future function.");
+    il[ind] = arg.awaiter;
+    ind++;
+}
+template <bool returnTypeAsIndex, typename ...Args>
+inline void io::lowlevel::allSettle<returnTypeAsIndex, Args...>::deploy(future&& arg) {
     assert(arg.awaiter->coro == nullptr || !"await ERROR: future is not clean: being co_awaited by another coroutine, or not processed by make_future function.");
     arg.awaiter->coro = (std::function<void(awaiter*)>*)1;    //hold the lifetime, prevent from deconstruct.
     il[ind] = arg.awaiter;
@@ -146,9 +146,9 @@ inline void io::lowlevel::allSettle<Args...>::deploy(future&& arg) {
 
 
 //awaitable_base
-template <typename T_FSM, io::lowlevel::selector_status status, typename ...Args>
+template <typename T_FSM, bool returnTypeAsIndex, io::lowlevel::selector_status status, typename ...Args>
     requires (std::is_convertible_v<Args&, io::future&> && ...)
-inline io::lowlevel::awaitable_base<T_FSM, status, Args...>::awaitable_base(io::fsm_promise<T_FSM>& _fsm, std::array<awaiter*, sizeof...(Args)>&& il)
+inline io::lowlevel::awaitable_base<T_FSM, returnTypeAsIndex, status, Args...>::awaitable_base(io::fsm_promise<T_FSM>& _fsm, std::array<awaiter*, sizeof...(Args)>&& il)
     : f_p(_fsm), await_arr(std::move(il)) {
 
     when_all_count = sizeof...(Args);
@@ -178,6 +178,46 @@ inline io::lowlevel::awaitable_base<T_FSM, status, Args...>::awaitable_base(io::
     {
         i->coro = &coro_set;
     }
+}
+template <typename T_FSM, bool returnTypeAsIndex, io::lowlevel::selector_status status, typename ...Args>
+    requires (std::is_convertible_v<Args&, io::future&> && ...)
+inline io::future_tag io::lowlevel::awaitable_base<T_FSM, returnTypeAsIndex, status, Args...>::await_resume() noexcept requires (!returnTypeAsIndex && sizeof...(Args) == 1 && !(std::is_convertible_v<Args&, io::clock&> && ...)) {
+    return { who };
+}
+template <typename T_FSM, bool returnTypeAsIndex, io::lowlevel::selector_status status, typename ...Args>
+    requires (std::is_convertible_v<Args&, io::future&> && ...)
+inline io::future_tag io::lowlevel::awaitable_base<T_FSM, returnTypeAsIndex, status, Args...>::await_resume() noexcept requires (!returnTypeAsIndex && sizeof...(Args) == 1 && (std::is_convertible_v<Args&, io::clock&> && ...)) {
+    return { who };
+}
+template <typename T_FSM, bool returnTypeAsIndex, io::lowlevel::selector_status status, typename ...Args>
+    requires (std::is_convertible_v<Args&, io::future&> && ...)
+inline io::future_tag io::lowlevel::awaitable_base<T_FSM, returnTypeAsIndex, status, Args...>::await_resume() noexcept requires (!returnTypeAsIndex && sizeof...(Args) >= 2 && status == selector_status::allsettle) {
+    return {};
+}
+template <typename T_FSM, bool returnTypeAsIndex, io::lowlevel::selector_status status, typename ...Args>
+    requires (std::is_convertible_v<Args&, io::future&> && ...)
+inline io::future_tag io::lowlevel::awaitable_base<T_FSM, returnTypeAsIndex, status, Args...>::await_resume() noexcept requires (!returnTypeAsIndex && sizeof...(Args) >= 2 && status != selector_status::allsettle) {
+    return { who };
+}
+template <typename T_FSM, bool returnTypeAsIndex, io::lowlevel::selector_status status, typename ...Args>
+    requires (std::is_convertible_v<Args&, io::future&> && ...)
+inline int io::lowlevel::awaitable_base<T_FSM, returnTypeAsIndex, status, Args...>::await_resume() noexcept requires (returnTypeAsIndex && sizeof...(Args) == 1 && !(std::is_convertible_v<Args&, io::clock&> && ...)) {
+    return which;
+}
+template <typename T_FSM, bool returnTypeAsIndex, io::lowlevel::selector_status status, typename ...Args>
+    requires (std::is_convertible_v<Args&, io::future&> && ...)
+inline int io::lowlevel::awaitable_base<T_FSM, returnTypeAsIndex, status, Args...>::await_resume() noexcept requires (returnTypeAsIndex && sizeof...(Args) == 1 && (std::is_convertible_v<Args&, io::clock&> && ...)) {
+    return which;
+}
+template <typename T_FSM, bool returnTypeAsIndex, io::lowlevel::selector_status status, typename ...Args>
+    requires (std::is_convertible_v<Args&, io::future&> && ...)
+inline int io::lowlevel::awaitable_base<T_FSM, returnTypeAsIndex, status, Args...>::await_resume() noexcept requires (returnTypeAsIndex && sizeof...(Args) >= 2 && status == selector_status::allsettle) {
+    return -1;
+}
+template <typename T_FSM, bool returnTypeAsIndex, io::lowlevel::selector_status status, typename ...Args>
+    requires (std::is_convertible_v<Args&, io::future&> && ...)
+inline int io::lowlevel::awaitable_base<T_FSM, returnTypeAsIndex, status, Args...>::await_resume() noexcept requires (returnTypeAsIndex && sizeof...(Args) >= 2 && status != selector_status::allsettle) {
+    return which;
 }
 
 
