@@ -20,7 +20,7 @@
 #if defined(ASIO_WINDOWS_RUNTIME)
 // Empty.
 #elif defined(ASIO_WINDOWS) || defined(__CYGWIN__)
-# if defined(_WINSOCKAPI_) && !defined(_WINSOCK2API_)
+# if (defined(_WINSOCKAPI_) && !defined(_WINSOCKAPI_PREVENTED_)) && !defined(_WINSOCK2API_)
 #  error WinSock.h has already been included
 # endif // defined(_WINSOCKAPI_) && !defined(_WINSOCK2API_)
 # if defined(__BORLANDC__)
