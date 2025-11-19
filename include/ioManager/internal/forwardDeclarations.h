@@ -12,6 +12,7 @@
 																	template <typename T2>requires (std::is_same_v<T2, void> || std::is_default_constructible_v<T2>)friend struct io::fsm_func;\
 																	template <typename T2>friend struct io::fsm_handle;\
 																	friend struct io::manager;\
+                                                                    template <typename T2> friend struct dynamic_combinator;\
 																	friend struct io::sock::tcp;\
 																	friend struct io::sock::tcp_accp;\
 																	friend struct io::sock::udp;\
@@ -41,6 +42,8 @@ template <typename T>
 struct fsm_func;
 template <typename T>struct fsm_handle;
 struct manager;
+template <typename T>
+struct dynamic_combinator;
 struct pool;
 struct yield_t;
 template <typename Front, typename Rear, typename Adaptor>struct pipeline_constructor;

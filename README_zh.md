@@ -389,7 +389,13 @@ io::fsm_func<void> race_example()
     }(std::move(prom2))).detach();
     
     // 等待race结果
-    co_await io::future::race(fut1, fut2);
+    IO_SELECT_BEGIN(io::future::race(fut1, fut2))
+    // 默认结果（all任意失败、any任意成功、allSettle完成）
+    IO_SELECT(fut1)
+    //
+    IO_SELECT(fut2)
+    //
+    IO_SELECT_END
     
     std::cout << "Race完成！" << std::endl;
     
