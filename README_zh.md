@@ -390,11 +390,14 @@ io::fsm_func<void> race_example()
     
     // 等待race结果
     IO_SELECT_BEGIN(io::future::race(fut1, fut2))
-    // 默认结果（all任意失败、any任意成功、allSettle完成）
+    // 此处执行默认结果（all任意失败、any任意成功、allSettle完成）
+    // Default Codes...
     IO_SELECT(fut1)
-    //
+    // 此处对应 fut1 被触发的代码
+    // Codes...
     IO_SELECT(fut2)
-    //
+    // 此处对应 fut2 被触发的代码
+    // Codes...
     IO_SELECT_END
     
     std::cout << "Race完成！" << std::endl;
