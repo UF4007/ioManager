@@ -496,7 +496,7 @@ namespace io
                 return awaiter->no_tm.err;
             }
             inline bool isSet() {
-                return awaiter->bit_set & (awaiter->set_lock & awaiter->occupy_lock);
+                return awaiter->bit_set & (awaiter->set_lock | awaiter->occupy_lock);
             }
             enum class status_t{
                 null = 0,
@@ -920,68 +920,12 @@ namespace io
 
         using future_fsm_handle_ = io::fsm_handle<io::future>;
 
-        //io::dispatcher<T> == std::deque<io::fsm_handle<T>>
-        // a simple dispatcher of coroutines.
-        template <typename T>
-        struct dispatcher {
-            using iterator = std::deque<io::fsm_handle<T>>::iterator;
-
-            inline iterator end() { return _deque.end(); }
-
-            inline iterator begin() { return _deque.begin(); }
-
-            inline iterator erase(iterator iter) { return _deque.erase(iter); }
-
-            inline iterator erase(iterator begin, iterator end) { return _deque.erase(begin, end); }
-
-            inline void insert_before(io::fsm_handle<T>&& handle, iterator iter) {
-                _deque.insert(iter, std::move(handle));
-            }
-
-            inline void insert(io::fsm_handle<T>&& handle) {
-                _deque.emplace_back(std::move(handle));
-            }
-
-            inline void clear() {
-                return _deque.clear();
-            }
-
-            inline void remove_vacancy() {
-                auto it = _deque.begin();
-                while (it != _deque.end()) {
-                    if (it->done()) {
-                        it = _deque.erase(it);
-                        continue;
-                    }
-                };
-            }
-
-            inline size_t size() {
-                return _deque.size();
-            }
-
-            template <typename U>
-            inline iterator find(const U& key) requires requires (const T& a, const U& b) { { a == b } -> std::convertible_to<bool>; } {
-                iterator result = this->end();
-
-                auto it = _deque.begin();
-                while (it != _deque.end()) {
-                    if (it->done()) {
-                        it = _deque.erase(it);
-                        continue;
-                    }
-
-                    if (result == this->end() && key == *it->data()) {
-                        result = it;
-                    }
-                    ++it;
-                }
-
-                return result;
-            }
-
-        private:
-            std::deque<io::fsm_handle<T>> _deque;
+        // Logic mode enum
+        enum class combinator_t {
+            all = 0,
+            any = 1,
+            race = 2,
+            allSettle = 3
         };
 
         //scheduler, executor
@@ -1496,6 +1440,228 @@ namespace io
             inline ~pool() {
                 stop();
             }
+        };
+        
+        //dynamic combinator for combining futures dynamically
+        template <typename T>
+        struct dynamic_combinator {
+            __IO_INTERNAL_HEADER_PERMISSION;
+        private:
+            inline bool resolve_test() {
+                switch (logic_mode) {
+                    case combinator_t::all: {
+                        // all mode: check if any reject or all resolve
+                        if (rejected_count > 0) {
+                            return true;
+                        } else if (completed_count == values.size()) {
+                            return true;
+                        }
+                        break;
+                    }
+                    case combinator_t::any: {
+                        // any mode: check if any resolve or all reject
+                        if (completed_count > rejected_count) {
+                            return true;
+                        } else if (rejected_count == values.size()) {
+                            return true;
+                        }
+                        break;
+                    }
+                    case combinator_t::race: {
+                        // race mode: check if any complete
+                        if (completed_count > 0) {
+                            return true;
+                        }
+                        break;
+                    }
+                    case combinator_t::allSettle: {
+                        // allSettle mode: check if all complete
+                        if (completed_count == values.size()) {
+                            return true;
+                        }
+                        break;
+                    }
+                }
+                return false;
+            }
+        public:
+            // Type alias
+            using _Type = std::conditional_t<std::is_same_v<T, void>, std::monostate, T>;
+
+            // Constructor with ioManager
+            inline dynamic_combinator(combinator_t logic, manager *mngr)
+                : manager_ptr(mngr), logic_mode(logic) {
+                initialize_coro_set();
+            }
+
+            // Constructor with logic and fsm template parameter
+            template <typename FSM>
+            inline dynamic_combinator(combinator_t logic, FSM &fsm_param)
+                : dynamic_combinator(logic, fsm_param.getManager()) {}
+            
+            // Push future with value
+            template <typename U>
+            inline void push(future&& fut, U&& value) requires (!std::is_same_v<T, void>) {
+                auto result = values.emplace(fut.awaiter, std::forward<U>(value));
+                IO_ASSERT(result.second, "dynamic_combinator ERROR: Awaiter already exists in values map.");
+
+                // Check if already set
+                if (fut.isSet()) {
+                    std::invoke(coro_set, fut.awaiter);
+                } else {
+                    // Not set yet, set the coro callback
+                    fut.awaiter->coro = &coro_set;
+                }
+
+                // Release the future (transfer ownership to combinator)
+                fut.awaiter = nullptr;
+            }
+            
+            inline void push(future&& fut) {
+                // Store the value if T is not void
+                if constexpr (!std::is_same_v<T, void>) {
+                    auto result = values.emplace(fut.awaiter, _Type{});
+                    IO_ASSERT(result.second, "dynamic_combinator ERROR: Awaiter already exists in values map.");
+                }
+                else {
+                    auto result = values.emplace(fut.awaiter, std::monostate{});
+                    IO_ASSERT(result.second, "dynamic_combinator ERROR: Awaiter already exists in values map.");
+                }
+
+                // Check if already set
+                if (fut.isSet()) {
+                    std::invoke(coro_set, fut.awaiter);
+                } else {
+                    // Not set yet, set the coro callback
+                    fut.awaiter->coro = &coro_set;
+                }
+
+                // Release the future (transfer ownership to combinator)
+                fut.awaiter = nullptr;
+            }
+
+            inline ~dynamic_combinator() {
+                // Clean up all awaiters in values map
+                for (auto& [awa, val] : values) {
+                    io::future fut;
+                    fut.awaiter = awa;
+                    awa->coro = nullptr;
+                }
+                // Invalidate combined_promise to release its awaiter
+                combined_promise.reject_later(std::errc::operation_canceled);
+            };
+            
+            // Get future reference
+            inline future get_future() {
+                if (combined_promise.valid() == true) {
+                    IO_ASSERT(false, "dynamic_combinator ERROR: get_future() called multiple times without the previous future being resolved.");
+                }
+                io::future ret;
+                combined_promise = manager_ptr->make_future(ret);
+
+                // Check if condition already satisfied (should resolve immediately)
+                bool should_resolve = resolve_test();
+
+                // If condition already satisfied, create and immediately resolve a future
+                if (should_resolve) {
+                    combined_promise.resolve();
+                }
+
+                return ret;
+            }
+
+            // Set logic mode
+            inline void logic(combinator_t mode) {
+                logic_mode = mode;
+                if (resolve_test()) {
+                    combined_promise.resolve();
+                }
+            }
+            
+            // Get result when finished
+            inline auto finished_out() {
+                if constexpr (!std::is_same_v<T, void>) {
+                    // Get the value from lifo and remove from values map
+                    if (!lifo.empty()) {
+                        io::future fut;
+                        fut.awaiter = lifo.back();
+                        fut.awaiter->coro = nullptr;
+                        lifo.pop_back();
+                        
+                        // Decrement completed count
+                        completed_count--;
+                        
+                        // Check if it was a rejection and decrement rejected count
+                        if (fut.getErr()) {
+                            rejected_count--;
+                        }
+                        
+                        auto it = values.find(fut.awaiter);
+                        IO_ASSERT(it != values.end(), "dynamic_combinator ERROR: Awaiter not found in values map.");
+
+                        _Type result = std::move(it->second);
+                        values.erase(it);
+                        return std::optional<_Type>(std::move(result));
+                    }
+                    // Return empty optional if not found
+                    return std::optional<_Type>(std::nullopt);
+                } else {
+                    // For void type, clear entire lifo and corresponding values entries, return cleared count
+                    size_t cleared_count = 0;
+                    while (!lifo.empty()) {
+                        io::future fut;
+                        fut.awaiter = lifo.back();
+                        fut.awaiter->coro = nullptr;
+                        lifo.pop_back();
+
+                        auto it = values.find(fut.awaiter);
+                        IO_ASSERT(it != values.end(), "dynamic_combinator ERROR: Awaiter not found in values map.");
+                        values.erase(it);
+                        cleared_count++;
+                    }
+                    completed_count = 0;
+                    rejected_count = 0;
+                    return cleared_count;
+                }
+            }
+            
+            dynamic_combinator(const dynamic_combinator&) = delete;
+            dynamic_combinator& operator=(const dynamic_combinator&) = delete;
+            dynamic_combinator(dynamic_combinator&&) = default;
+            dynamic_combinator& operator=(dynamic_combinator&&) = default;
+            
+        private:
+            inline void initialize_coro_set() {
+                // Create the lambda that will be called when any awaiter completes
+                coro_set = [this](lowlevel::awaiter* awa) {
+                    io::future fut;
+                    fut.awaiter = awa;
+                    lifo.push_back(awa);
+                    completed_count++;
+                    if (fut.getErr()) {
+                        rejected_count++;
+                    }
+
+                    bool should_resolve = resolve_test();
+                    if (should_resolve) {
+                        if (fut.getErr()) {
+                            combined_promise.reject_later(fut.getErr());
+                        } else {
+                            combined_promise.resolve_later();
+                        }
+                    }
+                    fut.awaiter = nullptr; // avoid deconstruction
+                };
+            }
+
+            std::unordered_map<lowlevel::awaiter*, _Type> values;
+            std::vector<lowlevel::awaiter*> lifo;
+            io::promise<void> combined_promise;
+            combinator_t logic_mode = combinator_t::all;
+            manager* manager_ptr = nullptr;
+            std::function<void(lowlevel::awaiter*)> coro_set;
+            size_t completed_count = 0;
+            size_t rejected_count = 0;
         };
 
 

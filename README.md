@@ -410,7 +410,18 @@ io::fsm_func<void> race_example()
     }(std::move(prom2))).detach();
     
     // Wait for the race result
-    co_await io::future::race(fut1, fut2);
+    IO_SELECT_BEGIN(io::future::race(fut1, fut2))
+    // Executes the default result here: 
+    // all: fails if any future fails
+    // any: succeeds if any future succeeds
+    // allSettle: completes when all settle
+    IO_SELECT(fut1)
+    // Code triggered here for fut1
+    // Codes...
+    IO_SELECT(fut2)
+    // Code triggered here for fut2
+    // Codes...
+    IO_SELECT_END
     
     std::cout << "Race completed!" << std::endl;
     
