@@ -572,9 +572,8 @@ inline int case_insensitive_compare(const char* s1, const char* s2) {
                     // Output operation - implements output protocol
                     inline void operator>>(future_with<req_insitu>& fut) {
                         current_request.send_prom = manager->make_future(fut, &fut.data);
-                        if (request_complete)
-                        {
-                            current_request.try_send();
+                        if (request_complete) {
+                            current_request.try_send<io::out_side>();
                             request_complete = false;
                         }
                     }
@@ -597,9 +596,9 @@ inline int case_insensitive_compare(const char* s1, const char* s2) {
                                 buffer_save = false;
                             }
                             if (request_complete == true) {
-                                if (current_request.try_send()) {
-                                    llhttp::llhttp_reset(&parser);
-                                    current_request.recv_prom.resolve();
+                                llhttp::llhttp_reset(&parser);
+                                if (current_request.try_send<io::in_side>()) {
+                                    request_complete = false;
                                 }
                             }
                             else
@@ -895,7 +894,7 @@ inline int case_insensitive_compare(const char* s1, const char* s2) {
                         current_response.send_prom = manager->make_future(fut, &fut.data);
                         if (response_complete)
                         {
-                            current_response.try_send();
+                            current_response.try_send<io::out_side>();
                             response_complete = false;
                         }
                     }
@@ -923,9 +922,9 @@ inline int case_insensitive_compare(const char* s1, const char* s2) {
                             }
                             if (response_complete == true)
                             {
-                                if (current_response.try_send()) {
-                                    llhttp::llhttp_reset(&parser);
-                                    current_response.recv_prom.resolve();
+                                llhttp::llhttp_reset(&parser);
+                                if (current_response.try_send<io::in_side>()) {
+                                    response_complete = false;
                                 }
                             }
                             else

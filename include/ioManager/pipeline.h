@@ -541,6 +541,10 @@ namespace io {
             inline pipeline() {}
         };
 
+        constexpr size_t none_side = 0;
+        constexpr size_t in_side = 1;
+        constexpr size_t out_side = 2;
+
         template <typename T> struct protocol_lock {
             protocol_lock() {}
             template <typename... Args>
@@ -548,13 +552,37 @@ namespace io {
             promise<T> send_prom;
             promise<> recv_prom;
             [[no_unique_address]] std::optional<T> temp;
+
+            template <size_t Side = none_side>
             bool try_send() {
                 if (send_prom.valid() && temp.has_value()) {
-                    send_prom.resolve_later(std::move(*temp));
+                    if constexpr (Side == out_side)
+                        send_prom.resolve(std::move(*temp));
+                    else
+                        send_prom.resolve_later(std::move(*temp));
+
+                    if constexpr (Side == in_side)
+                        recv_prom.resolve();
+                    else
+                        recv_prom.resolve_later();
+
                     temp.reset();
                     return true;
                 }
                 else {
+                    return false;
+                }
+            }
+
+            template <typename U>
+            bool try_send(U&& value) requires (std::is_convertible<U, T>) {
+                if (send_prom.valid()) {
+                    send_prom.resolve_later(std::forward<U>(value));
+                    recv_prom.resolve_later();
+                    return true;
+                }
+                else {
+                    temp = T(std::forward<U>(value));
                     return false;
                 }
             }
