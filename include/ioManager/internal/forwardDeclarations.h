@@ -20,6 +20,11 @@
 																	template <typename Rear2, typename Front2, typename Adaptor2>friend struct io::pipeline;\
 																	template <typename Pipeline2, bool individual_coro2, typename ErrorHandler2>friend class pipeline_started;\
 																	template <typename FSM_Index2, typename FSM_In2, typename FSM_Out2>friend struct io::rpc;\
+                                                                    template <typename T_spawn> friend fsm_handle<T_spawn> spawn_now(fsm_func<T_spawn> new_fsm);\
+																	friend void io::minicoro_detail::resume(minicoro_detail::mco_coro* co);\
+																	template <typename Func, typename... Args> friend void io::minicoro_detail::stackful_coro_entry(minicoro_detail::mco_coro* co);\
+																	template <typename Func, typename... Args> friend bool io::stackful::spawn(Func&& func, Args &&...args);\
+																	template <typename T> friend io::future_tag io::stackful::await(T&& fut);\
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------
 template <typename T, size_t batch_size>struct hive;
@@ -55,6 +60,17 @@ namespace sock {
 	struct tcp_accp;
 	struct udp;
 };
+namespace minicoro_detail {
+	void resume(minicoro_detail::mco_coro* co);
+	template <typename Func, typename... Args>
+	void stackful_coro_entry(minicoro_detail::mco_coro* co);
+}
+namespace stackful {
+	template <typename Func, typename... Args>
+	bool spawn(Func&& func, Args &&...args);
+	template <typename T>
+	io::future_tag await(T&& fut);
+}
 
 #define IO_MANAGER_FORWARD_FUNC(___obj___,___func___) template <typename ...Args> auto ___func___(Args&&...args) { return ___obj___.___func___(std::forward<Args>(args)...); }
 

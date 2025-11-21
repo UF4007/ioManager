@@ -575,7 +575,7 @@ namespace io {
             }
 
             template <typename U>
-            bool try_send(U&& value) requires (std::is_convertible<U, T>) {
+            bool try_send(U&& value) requires (std::is_convertible_v<U, T>) {
                 if (send_prom.valid()) {
                     send_prom.resolve_later(std::forward<U>(value));
                     recv_prom.resolve_later();

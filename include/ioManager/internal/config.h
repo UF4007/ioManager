@@ -27,6 +27,6 @@
 #define IO_USE_OPENSSL 0
 #endif
 
-#ifndef IO_USE_MINICORO
-#define IO_USE_MINICORO 1
+#ifndef IO_USE_STACKFUL
+#define IO_USE_STACKFUL 1
 #endif

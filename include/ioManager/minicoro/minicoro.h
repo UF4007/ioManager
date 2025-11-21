@@ -485,11 +485,11 @@ extern "C" {
 
 #ifndef MCO_NO_DEFAULT_ALLOCATOR
   #if defined(MCO_USE_VMEM_ALLOCATOR) && defined(_WIN32)
-    static void* mco_alloc(size_t size, void* allocator_data) {
+    inline void* mco_alloc(size_t size, void* allocator_data) {
       _MCO_UNUSED(allocator_data);
       return VirtualAlloc(NULL, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     }
-    static void mco_dealloc(void* ptr, size_t size, void* allocator_data) {
+    inline void mco_dealloc(void* ptr, size_t size, void* allocator_data) {
       _MCO_UNUSED(allocator_data);
       _MCO_UNUSED(size);
       int res = VirtualFree(ptr, 0, MEM_RELEASE);
@@ -498,12 +498,12 @@ extern "C" {
     }
   #elif defined(MCO_USE_VMEM_ALLOCATOR) /* POSIX virtual memory allocator */
     #include <sys/mman.h>
-    static void* mco_alloc(size_t size, void* allocator_data) {
+    inline void* mco_alloc(size_t size, void* allocator_data) {
       _MCO_UNUSED(allocator_data);
       void *ptr = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
       return ptr != MAP_FAILED ? ptr : NULL;
     }
-    static void mco_dealloc(void* ptr, size_t size, void* allocator_data) {
+    inline void mco_dealloc(void* ptr, size_t size, void* allocator_data) {
       _MCO_UNUSED(allocator_data);
       int res = munmap(ptr, size);
       _MCO_UNUSED(res);
@@ -517,11 +517,11 @@ extern "C" {
       #define MCO_ALLOC(size) calloc(1, size)
       #define MCO_DEALLOC(ptr, size) free(ptr)
     #endif
-    static void* mco_alloc(size_t size, void* allocator_data) {
+    inline void* mco_alloc(size_t size, void* allocator_data) {
       _MCO_UNUSED(allocator_data);
       return MCO_ALLOC(size);
     }
-    static void mco_dealloc(void* ptr, size_t size, void* allocator_data) {
+    inline void mco_dealloc(void* ptr, size_t size, void* allocator_data) {
       _MCO_UNUSED(size);
       _MCO_UNUSED(allocator_data);
       MCO_DEALLOC(ptr, size);
@@ -557,14 +557,14 @@ void __tsan_switch_to_fiber(void* fiber, unsigned flags);
 #include <string.h> /* For memcpy and memset. */
 
 /* Utility for aligning addresses. */
-static MCO_FORCE_INLINE size_t _mco_align_forward(size_t addr, size_t align) {
+inline MCO_FORCE_INLINE size_t _mco_align_forward(size_t addr, size_t align) {
   return (addr + (align-1)) & ~(align-1);
 }
 
 /* Variable holding the current running coroutine per thread. */
-static MCO_THREAD_LOCAL mco_coro* mco_current_co = NULL;
+inline MCO_THREAD_LOCAL mco_coro* mco_current_co = NULL;
 
-static MCO_FORCE_INLINE void _mco_prepare_jumpin(mco_coro* co) {
+inline MCO_FORCE_INLINE void _mco_prepare_jumpin(mco_coro* co) {
   /* Set the old coroutine to normal state and update it. */
   mco_coro* prev_co = mco_running(); /* Must access through `mco_running`. */
   MCO_ASSERT(co->prev_co == NULL);
@@ -589,7 +589,7 @@ static MCO_FORCE_INLINE void _mco_prepare_jumpin(mco_coro* co) {
 #endif
 }
 
-static MCO_FORCE_INLINE void _mco_prepare_jumpout(mco_coro* co) {
+inline MCO_FORCE_INLINE void _mco_prepare_jumpout(mco_coro* co) {
   /* Switch back to the previous running coroutine. */
   /* MCO_ASSERT(mco_running() == co); */
   mco_coro* prev_co = co->prev_co;
@@ -615,10 +615,10 @@ static MCO_FORCE_INLINE void _mco_prepare_jumpout(mco_coro* co) {
 #endif
 }
 
-static void _mco_jumpin(mco_coro* co);
-static void _mco_jumpout(mco_coro* co);
+inline void _mco_jumpin(mco_coro* co);
+inline void _mco_jumpout(mco_coro* co);
 
-static MCO_NO_INLINE void _mco_main(mco_coro* co) {
+inline MCO_NO_INLINE void _mco_main(mco_coro* co) {
   co->func(co); /* Run the coroutine function. */
   co->state = MCO_DEAD; /* Coroutine finished successfully, set state to dead. */
   _mco_jumpout(co); /* Jump back to the old context .*/
@@ -678,81 +678,81 @@ typedef struct _mco_ctxbuf {
 #pragma section(".text")
 #endif
 
-_MCO_ASM_BLOB static unsigned char _mco_wrap_main_code[] = {
-  0x4c, 0x89, 0xe9,                                       /* mov    %r13,%rcx */
-  0x41, 0xff, 0xe4,                                       /* jmpq   *%r12 */
-  0xc3,                                                   /* retq */
-  0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90    /* nop */
+_MCO_ASM_BLOB inline unsigned char _mco_wrap_main_code[] = {
+    0x4c, 0x89, 0xe9,                                    /* mov    %r13,%rcx */
+    0x41, 0xff, 0xe4,                                    /* jmpq   *%r12 */
+    0xc3,                                                /* retq */
+    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 /* nop */
 };
 
-_MCO_ASM_BLOB static unsigned char _mco_switch_code[] = {
-  0x48, 0x8d, 0x05, 0x3e, 0x01, 0x00, 0x00,              /* lea    0x13e(%rip),%rax    */
-  0x48, 0x89, 0x01,                                      /* mov    %rax,(%rcx)         */
-  0x48, 0x89, 0x61, 0x08,                                /* mov    %rsp,0x8(%rcx)      */
-  0x48, 0x89, 0x69, 0x10,                                /* mov    %rbp,0x10(%rcx)     */
-  0x48, 0x89, 0x59, 0x18,                                /* mov    %rbx,0x18(%rcx)     */
-  0x4c, 0x89, 0x61, 0x20,                                /* mov    %r12,0x20(%rcx)     */
-  0x4c, 0x89, 0x69, 0x28,                                /* mov    %r13,0x28(%rcx)     */
-  0x4c, 0x89, 0x71, 0x30,                                /* mov    %r14,0x30(%rcx)     */
-  0x4c, 0x89, 0x79, 0x38,                                /* mov    %r15,0x38(%rcx)     */
-  0x48, 0x89, 0x79, 0x40,                                /* mov    %rdi,0x40(%rcx)     */
-  0x48, 0x89, 0x71, 0x48,                                /* mov    %rsi,0x48(%rcx)     */
-  0x0f, 0x11, 0x71, 0x50,                                /* movups %xmm6,0x50(%rcx)    */
-  0x0f, 0x11, 0x79, 0x60,                                /* movups %xmm7,0x60(%rcx)    */
-  0x44, 0x0f, 0x11, 0x41, 0x70,                          /* movups %xmm8,0x70(%rcx)    */
-  0x44, 0x0f, 0x11, 0x89, 0x80, 0x00, 0x00, 0x00,        /* movups %xmm9,0x80(%rcx)    */
-  0x44, 0x0f, 0x11, 0x91, 0x90, 0x00, 0x00, 0x00,        /* movups %xmm10,0x90(%rcx)   */
-  0x44, 0x0f, 0x11, 0x99, 0xa0, 0x00, 0x00, 0x00,        /* movups %xmm11,0xa0(%rcx)   */
-  0x44, 0x0f, 0x11, 0xa1, 0xb0, 0x00, 0x00, 0x00,        /* movups %xmm12,0xb0(%rcx)   */
-  0x44, 0x0f, 0x11, 0xa9, 0xc0, 0x00, 0x00, 0x00,        /* movups %xmm13,0xc0(%rcx)   */
-  0x44, 0x0f, 0x11, 0xb1, 0xd0, 0x00, 0x00, 0x00,        /* movups %xmm14,0xd0(%rcx)   */
-  0x44, 0x0f, 0x11, 0xb9, 0xe0, 0x00, 0x00, 0x00,        /* movups %xmm15,0xe0(%rcx)   */
-  0x65, 0x4c, 0x8b, 0x14, 0x25, 0x30, 0x00, 0x00, 0x00,  /* mov    %gs:0x30,%r10       */
-  0x49, 0x8b, 0x42, 0x20,                                /* mov    0x20(%r10),%rax     */
-  0x48, 0x89, 0x81, 0xf0, 0x00, 0x00, 0x00,              /* mov    %rax,0xf0(%rcx)     */
-  0x49, 0x8b, 0x82, 0x78, 0x14, 0x00, 0x00,              /* mov    0x1478(%r10),%rax   */
-  0x48, 0x89, 0x81, 0xf8, 0x00, 0x00, 0x00,              /* mov    %rax,0xf8(%rcx)     */
-  0x49, 0x8b, 0x42, 0x10,                                /* mov    0x10(%r10),%rax     */
-  0x48, 0x89, 0x81, 0x00, 0x01, 0x00, 0x00,              /* mov    %rax,0x100(%rcx)    */
-  0x49, 0x8b, 0x42, 0x08,                                /* mov    0x8(%r10),%rax      */
-  0x48, 0x89, 0x81, 0x08, 0x01, 0x00, 0x00,              /* mov    %rax,0x108(%rcx)    */
-  0x48, 0x8b, 0x82, 0x08, 0x01, 0x00, 0x00,              /* mov    0x108(%rdx),%rax    */
-  0x49, 0x89, 0x42, 0x08,                                /* mov    %rax,0x8(%r10)      */
-  0x48, 0x8b, 0x82, 0x00, 0x01, 0x00, 0x00,              /* mov    0x100(%rdx),%rax    */
-  0x49, 0x89, 0x42, 0x10,                                /* mov    %rax,0x10(%r10)     */
-  0x48, 0x8b, 0x82, 0xf8, 0x00, 0x00, 0x00,              /* mov    0xf8(%rdx),%rax     */
-  0x49, 0x89, 0x82, 0x78, 0x14, 0x00, 0x00,              /* mov    %rax,0x1478(%r10)   */
-  0x48, 0x8b, 0x82, 0xf0, 0x00, 0x00, 0x00,              /* mov    0xf0(%rdx),%rax     */
-  0x49, 0x89, 0x42, 0x20,                                /* mov    %rax,0x20(%r10)     */
-  0x44, 0x0f, 0x10, 0xba, 0xe0, 0x00, 0x00, 0x00,        /* movups 0xe0(%rdx),%xmm15   */
-  0x44, 0x0f, 0x10, 0xb2, 0xd0, 0x00, 0x00, 0x00,        /* movups 0xd0(%rdx),%xmm14   */
-  0x44, 0x0f, 0x10, 0xaa, 0xc0, 0x00, 0x00, 0x00,        /* movups 0xc0(%rdx),%xmm13   */
-  0x44, 0x0f, 0x10, 0xa2, 0xb0, 0x00, 0x00, 0x00,        /* movups 0xb0(%rdx),%xmm12   */
-  0x44, 0x0f, 0x10, 0x9a, 0xa0, 0x00, 0x00, 0x00,        /* movups 0xa0(%rdx),%xmm11   */
-  0x44, 0x0f, 0x10, 0x92, 0x90, 0x00, 0x00, 0x00,        /* movups 0x90(%rdx),%xmm10   */
-  0x44, 0x0f, 0x10, 0x8a, 0x80, 0x00, 0x00, 0x00,        /* movups 0x80(%rdx),%xmm9    */
-  0x44, 0x0f, 0x10, 0x42, 0x70,                          /* movups 0x70(%rdx),%xmm8    */
-  0x0f, 0x10, 0x7a, 0x60,                                /* movups 0x60(%rdx),%xmm7    */
-  0x0f, 0x10, 0x72, 0x50,                                /* movups 0x50(%rdx),%xmm6    */
-  0x48, 0x8b, 0x72, 0x48,                                /* mov    0x48(%rdx),%rsi     */
-  0x48, 0x8b, 0x7a, 0x40,                                /* mov    0x40(%rdx),%rdi     */
-  0x4c, 0x8b, 0x7a, 0x38,                                /* mov    0x38(%rdx),%r15     */
-  0x4c, 0x8b, 0x72, 0x30,                                /* mov    0x30(%rdx),%r14     */
-  0x4c, 0x8b, 0x6a, 0x28,                                /* mov    0x28(%rdx),%r13     */
-  0x4c, 0x8b, 0x62, 0x20,                                /* mov    0x20(%rdx),%r12     */
-  0x48, 0x8b, 0x5a, 0x18,                                /* mov    0x18(%rdx),%rbx     */
-  0x48, 0x8b, 0x6a, 0x10,                                /* mov    0x10(%rdx),%rbp     */
-  0x48, 0x8b, 0x62, 0x08,                                /* mov    0x8(%rdx),%rsp      */
-  0xff, 0x22,                                            /* jmpq   *(%rdx)             */
-  0xc3,                                                  /* retq                       */
-  0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,        /* nop                        */
-  0x90, 0x90,                                            /* nop                        */
+_MCO_ASM_BLOB inline unsigned char _mco_switch_code[] = {
+    0x48, 0x8d, 0x05, 0x3e, 0x01, 0x00, 0x00,             /* lea    0x13e(%rip),%rax    */
+    0x48, 0x89, 0x01,                                     /* mov    %rax,(%rcx)         */
+    0x48, 0x89, 0x61, 0x08,                               /* mov    %rsp,0x8(%rcx)      */
+    0x48, 0x89, 0x69, 0x10,                               /* mov    %rbp,0x10(%rcx)     */
+    0x48, 0x89, 0x59, 0x18,                               /* mov    %rbx,0x18(%rcx)     */
+    0x4c, 0x89, 0x61, 0x20,                               /* mov    %r12,0x20(%rcx)     */
+    0x4c, 0x89, 0x69, 0x28,                               /* mov    %r13,0x28(%rcx)     */
+    0x4c, 0x89, 0x71, 0x30,                               /* mov    %r14,0x30(%rcx)     */
+    0x4c, 0x89, 0x79, 0x38,                               /* mov    %r15,0x38(%rcx)     */
+    0x48, 0x89, 0x79, 0x40,                               /* mov    %rdi,0x40(%rcx)     */
+    0x48, 0x89, 0x71, 0x48,                               /* mov    %rsi,0x48(%rcx)     */
+    0x0f, 0x11, 0x71, 0x50,                               /* movups %xmm6,0x50(%rcx)    */
+    0x0f, 0x11, 0x79, 0x60,                               /* movups %xmm7,0x60(%rcx)    */
+    0x44, 0x0f, 0x11, 0x41, 0x70,                         /* movups %xmm8,0x70(%rcx)    */
+    0x44, 0x0f, 0x11, 0x89, 0x80, 0x00, 0x00, 0x00,       /* movups %xmm9,0x80(%rcx)    */
+    0x44, 0x0f, 0x11, 0x91, 0x90, 0x00, 0x00, 0x00,       /* movups %xmm10,0x90(%rcx)   */
+    0x44, 0x0f, 0x11, 0x99, 0xa0, 0x00, 0x00, 0x00,       /* movups %xmm11,0xa0(%rcx)   */
+    0x44, 0x0f, 0x11, 0xa1, 0xb0, 0x00, 0x00, 0x00,       /* movups %xmm12,0xb0(%rcx)   */
+    0x44, 0x0f, 0x11, 0xa9, 0xc0, 0x00, 0x00, 0x00,       /* movups %xmm13,0xc0(%rcx)   */
+    0x44, 0x0f, 0x11, 0xb1, 0xd0, 0x00, 0x00, 0x00,       /* movups %xmm14,0xd0(%rcx)   */
+    0x44, 0x0f, 0x11, 0xb9, 0xe0, 0x00, 0x00, 0x00,       /* movups %xmm15,0xe0(%rcx)   */
+    0x65, 0x4c, 0x8b, 0x14, 0x25, 0x30, 0x00, 0x00, 0x00, /* mov    %gs:0x30,%r10       */
+    0x49, 0x8b, 0x42, 0x20,                               /* mov    0x20(%r10),%rax     */
+    0x48, 0x89, 0x81, 0xf0, 0x00, 0x00, 0x00,             /* mov    %rax,0xf0(%rcx)     */
+    0x49, 0x8b, 0x82, 0x78, 0x14, 0x00, 0x00,             /* mov    0x1478(%r10),%rax   */
+    0x48, 0x89, 0x81, 0xf8, 0x00, 0x00, 0x00,             /* mov    %rax,0xf8(%rcx)     */
+    0x49, 0x8b, 0x42, 0x10,                               /* mov    0x10(%r10),%rax     */
+    0x48, 0x89, 0x81, 0x00, 0x01, 0x00, 0x00,             /* mov    %rax,0x100(%rcx)    */
+    0x49, 0x8b, 0x42, 0x08,                               /* mov    0x8(%r10),%rax      */
+    0x48, 0x89, 0x81, 0x08, 0x01, 0x00, 0x00,             /* mov    %rax,0x108(%rcx)    */
+    0x48, 0x8b, 0x82, 0x08, 0x01, 0x00, 0x00,             /* mov    0x108(%rdx),%rax    */
+    0x49, 0x89, 0x42, 0x08,                               /* mov    %rax,0x8(%r10)      */
+    0x48, 0x8b, 0x82, 0x00, 0x01, 0x00, 0x00,             /* mov    0x100(%rdx),%rax    */
+    0x49, 0x89, 0x42, 0x10,                               /* mov    %rax,0x10(%r10)     */
+    0x48, 0x8b, 0x82, 0xf8, 0x00, 0x00, 0x00,             /* mov    0xf8(%rdx),%rax     */
+    0x49, 0x89, 0x82, 0x78, 0x14, 0x00, 0x00,             /* mov    %rax,0x1478(%r10)   */
+    0x48, 0x8b, 0x82, 0xf0, 0x00, 0x00, 0x00,             /* mov    0xf0(%rdx),%rax     */
+    0x49, 0x89, 0x42, 0x20,                               /* mov    %rax,0x20(%r10)     */
+    0x44, 0x0f, 0x10, 0xba, 0xe0, 0x00, 0x00, 0x00,       /* movups 0xe0(%rdx),%xmm15   */
+    0x44, 0x0f, 0x10, 0xb2, 0xd0, 0x00, 0x00, 0x00,       /* movups 0xd0(%rdx),%xmm14   */
+    0x44, 0x0f, 0x10, 0xaa, 0xc0, 0x00, 0x00, 0x00,       /* movups 0xc0(%rdx),%xmm13   */
+    0x44, 0x0f, 0x10, 0xa2, 0xb0, 0x00, 0x00, 0x00,       /* movups 0xb0(%rdx),%xmm12   */
+    0x44, 0x0f, 0x10, 0x9a, 0xa0, 0x00, 0x00, 0x00,       /* movups 0xa0(%rdx),%xmm11   */
+    0x44, 0x0f, 0x10, 0x92, 0x90, 0x00, 0x00, 0x00,       /* movups 0x90(%rdx),%xmm10   */
+    0x44, 0x0f, 0x10, 0x8a, 0x80, 0x00, 0x00, 0x00,       /* movups 0x80(%rdx),%xmm9    */
+    0x44, 0x0f, 0x10, 0x42, 0x70,                         /* movups 0x70(%rdx),%xmm8    */
+    0x0f, 0x10, 0x7a, 0x60,                               /* movups 0x60(%rdx),%xmm7    */
+    0x0f, 0x10, 0x72, 0x50,                               /* movups 0x50(%rdx),%xmm6    */
+    0x48, 0x8b, 0x72, 0x48,                               /* mov    0x48(%rdx),%rsi     */
+    0x48, 0x8b, 0x7a, 0x40,                               /* mov    0x40(%rdx),%rdi     */
+    0x4c, 0x8b, 0x7a, 0x38,                               /* mov    0x38(%rdx),%r15     */
+    0x4c, 0x8b, 0x72, 0x30,                               /* mov    0x30(%rdx),%r14     */
+    0x4c, 0x8b, 0x6a, 0x28,                               /* mov    0x28(%rdx),%r13     */
+    0x4c, 0x8b, 0x62, 0x20,                               /* mov    0x20(%rdx),%r12     */
+    0x48, 0x8b, 0x5a, 0x18,                               /* mov    0x18(%rdx),%rbx     */
+    0x48, 0x8b, 0x6a, 0x10,                               /* mov    0x10(%rdx),%rbp     */
+    0x48, 0x8b, 0x62, 0x08,                               /* mov    0x8(%rdx),%rsp      */
+    0xff, 0x22,                                           /* jmpq   *(%rdx)             */
+    0xc3,                                                 /* retq                       */
+    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,       /* nop                        */
+    0x90, 0x90,                                           /* nop                        */
 };
 
-void (*_mco_wrap_main)(void) = (void(*)(void))(void*)_mco_wrap_main_code;
-void (*_mco_switch)(_mco_ctxbuf* from, _mco_ctxbuf* to) = (void(*)(_mco_ctxbuf* from, _mco_ctxbuf* to))(void*)_mco_switch_code;
+inline void (*_mco_wrap_main)(void) = (void(*)(void))(void*)_mco_wrap_main_code;
+inline void (*_mco_switch)(_mco_ctxbuf* from, _mco_ctxbuf* to) = (void(*)(_mco_ctxbuf* from, _mco_ctxbuf* to))(void*)_mco_switch_code;
 
-static mco_result _mco_makectx(mco_coro* co, _mco_ctxbuf* ctx, void* stack_base, size_t stack_size) {
+inline mco_result _mco_makectx(mco_coro* co, _mco_ctxbuf* ctx, void* stack_base, size_t stack_size) {
   stack_size = stack_size - 32; /* Reserve 32 bytes for the shadow space. */
   void** stack_high_ptr = (void**)((size_t)stack_base + stack_size - sizeof(size_t));
   stack_high_ptr[0] = (void*)(0xdeaddeaddeaddead);  /* Dummy return address. */
@@ -828,7 +828,7 @@ __asm__(
 #endif
 );
 
-static mco_result _mco_makectx(mco_coro* co, _mco_ctxbuf* ctx, void* stack_base, size_t stack_size) {
+inline mco_result _mco_makectx(mco_coro* co, _mco_ctxbuf* ctx, void* stack_base, size_t stack_size) {
   stack_size = stack_size - 128; /* Reserve 128 bytes for the Red Zone space (System V AMD64 ABI). */
   void** stack_high_ptr = (void**)((size_t)stack_base + stack_size - sizeof(size_t));
   stack_high_ptr[0] = (void*)(0xdeaddeaddeaddead);  /* Dummy return address. */
@@ -1032,7 +1032,7 @@ __asm__(
   ".size _mco_switch, .-_mco_switch\n"
 );
 
-static mco_result _mco_makectx(mco_coro* co, _mco_ctxbuf* ctx, void* stack_base, size_t stack_size) {
+inline mco_result _mco_makectx(mco_coro* co, _mco_ctxbuf* ctx, void* stack_base, size_t stack_size) {
   ctx->s[0] = (void*)(co);
   ctx->s[1] = (void*)(_mco_main);
   ctx->pc = (void*)(_mco_wrap_main);
@@ -1088,7 +1088,7 @@ __asm__(
 #endif
 );
 
-static mco_result _mco_makectx(mco_coro* co, _mco_ctxbuf* ctx, void* stack_base, size_t stack_size) {
+inline mco_result _mco_makectx(mco_coro* co, _mco_ctxbuf* ctx, void* stack_base, size_t stack_size) {
   void** stack_high_ptr = (void**)((size_t)stack_base + stack_size - 16 - 1*sizeof(size_t));
   stack_high_ptr[0] = (void*)(0xdeaddead);  /* Dummy return address. */
   stack_high_ptr[1] = (void*)(co);
@@ -1158,7 +1158,7 @@ __asm__(
 #endif
 );
 
-static mco_result _mco_makectx(mco_coro* co, _mco_ctxbuf* ctx, void* stack_base, size_t stack_size) {
+inline mco_result _mco_makectx(mco_coro* co, _mco_ctxbuf* ctx, void* stack_base, size_t stack_size) {
   ctx->d[0] = (void*)(co);
   ctx->d[1] = (void*)(_mco_main);
   ctx->d[2] = (void*)(0xdeaddead); /* Dummy return address. */
@@ -1241,7 +1241,7 @@ __asm__(
 #endif
 );
 
-static mco_result _mco_makectx(mco_coro* co, _mco_ctxbuf* ctx, void* stack_base, size_t stack_size) {
+inline mco_result _mco_makectx(mco_coro* co, _mco_ctxbuf* ctx, void* stack_base, size_t stack_size) {
   ctx->x[0] = (void*)(co);
   ctx->x[1] = (void*)(_mco_main);
   ctx->x[2] = (void*)(0xdeaddeaddeaddead); /* Dummy return address. */
@@ -1263,24 +1263,24 @@ static mco_result _mco_makectx(mco_coro* co, _mco_ctxbuf* ctx, void* stack_base,
 typedef ucontext_t _mco_ctxbuf;
 
 #if defined(_LP64) || defined(__LP64__)
-static void _mco_wrap_main(unsigned int lo, unsigned int hi) {
+inline  void _mco_wrap_main(unsigned int lo, unsigned int hi) {
   mco_coro* co = (mco_coro*)(((size_t)lo) | (((size_t)hi) << 32)); /* Extract coroutine pointer. */
   _mco_main(co);
 }
 #else
-static void _mco_wrap_main(unsigned int lo) {
+inline  void _mco_wrap_main(unsigned int lo) {
   mco_coro* co = (mco_coro*)((size_t)lo); /* Extract coroutine pointer. */
   _mco_main(co);
 }
 #endif
 
-static MCO_FORCE_INLINE void _mco_switch(_mco_ctxbuf* from, _mco_ctxbuf* to) {
+inline MCO_FORCE_INLINE void _mco_switch(_mco_ctxbuf* from, _mco_ctxbuf* to) {
   int res = swapcontext(from, to);
   _MCO_UNUSED(res);
   MCO_ASSERT(res == 0);
 }
 
-static mco_result _mco_makectx(mco_coro* co, _mco_ctxbuf* ctx, void* stack_base, size_t stack_size) {
+inline  mco_result _mco_makectx(mco_coro* co, _mco_ctxbuf* ctx, void* stack_base, size_t stack_size) {
   /* Initialize ucontext. */
   if(getcontext(ctx) != 0) {
     MCO_LOG("failed to get ucontext");
@@ -1313,19 +1313,20 @@ typedef struct _mco_context {
   _mco_ctxbuf back_ctx;
 } _mco_context;
 
-static void _mco_jumpin(mco_coro* co) {
+inline  void _mco_jumpin(mco_coro* co) {
   _mco_context* context = (_mco_context*)co->context;
   _mco_prepare_jumpin(co);
   _mco_switch(&context->back_ctx, &context->ctx); /* Do the context switch. */
 }
 
-static void _mco_jumpout(mco_coro* co) {
-  _mco_context* context = (_mco_context*)co->context;
-  _mco_prepare_jumpout(co);
-  _mco_switch(&context->ctx, &context->back_ctx); /* Do the context switch. */
+inline  void _mco_jumpout(mco_coro *co)
+{
+    _mco_context *context = (_mco_context *)co->context;
+    _mco_prepare_jumpout(co);
+    _mco_switch(&context->ctx, &context->back_ctx); /* Do the context switch. */
 }
 
-static mco_result _mco_create_context(mco_coro* co, mco_desc* desc) {
+inline  mco_result _mco_create_context(mco_coro* co, mco_desc* desc) {
   /* Determine the context and stack address. */
   size_t co_addr = (size_t)co;
   size_t context_addr = _mco_align_forward(co_addr + sizeof(mco_coro), 16);
@@ -1355,7 +1356,7 @@ static mco_result _mco_create_context(mco_coro* co, mco_desc* desc) {
   return MCO_SUCCESS;
 }
 
-static void _mco_destroy_context(mco_coro* co) {
+inline void _mco_destroy_context(mco_coro* co) {
 #ifdef MCO_USE_VALGRIND
   _mco_context* context = (_mco_context*)co->context;
   if(context && context->valgrind_stack_id != 0) {
@@ -1367,7 +1368,7 @@ static void _mco_destroy_context(mco_coro* co) {
 #endif
 }
 
-static MCO_FORCE_INLINE void _mco_init_desc_sizes(mco_desc* desc, size_t stack_size) {
+inline MCO_FORCE_INLINE void _mco_init_desc_sizes(mco_desc* desc, size_t stack_size) {
   desc->coro_size = _mco_align_forward(sizeof(mco_coro), 16) +
                     _mco_align_forward(sizeof(_mco_context), 16) +
                     _mco_align_forward(desc->storage_size, 16) +
@@ -1388,7 +1389,7 @@ typedef struct _mco_context {
   void* back_fib;
 } _mco_context;
 
-static void _mco_jumpin(mco_coro* co) {
+inline void _mco_jumpin(mco_coro* co) {
   void *cur_fib = GetCurrentFiber();
   if(!cur_fib || cur_fib == (void*)0x1e00) { /* See http://blogs.msdn.com/oldnewthing/archive/2004/12/31/344799.aspx */
     cur_fib = ConvertThreadToFiber(NULL);
@@ -1400,11 +1401,11 @@ static void _mco_jumpin(mco_coro* co) {
   SwitchToFiber(context->fib);
 }
 
-static void CALLBACK _mco_wrap_main(void* co) {
+inline void CALLBACK _mco_wrap_main(void* co) {
   _mco_main((mco_coro*)co);
 }
 
-static void _mco_jumpout(mco_coro* co) {
+inline void _mco_jumpout(mco_coro* co) {
   _mco_context* context = (_mco_context*)co->context;
   void* back_fib = context->back_fib;
   MCO_ASSERT(back_fib != NULL);
@@ -1426,7 +1427,7 @@ typedef struct _mco_fiber {
   void **fls_slots;            /* fiber storage slots */
 } _mco_fiber;
 
-static mco_result _mco_create_context(mco_coro* co, mco_desc* desc) {
+inline mco_result _mco_create_context(mco_coro* co, mco_desc* desc) {
   /* Determine the context address. */
   size_t co_addr = (size_t)co;
   size_t context_addr = _mco_align_forward(co_addr + sizeof(mco_coro), 16);
@@ -1451,7 +1452,7 @@ static mco_result _mco_create_context(mco_coro* co, mco_desc* desc) {
   return MCO_SUCCESS;
 }
 
-static void _mco_destroy_context(mco_coro* co) {
+inline void _mco_destroy_context(mco_coro* co) {
   _mco_context* context = (_mco_context*)co->context;
   if(context && context->fib) {
     DeleteFiber(context->fib);
@@ -1459,7 +1460,7 @@ static void _mco_destroy_context(mco_coro* co) {
   }
 }
 
-static MCO_FORCE_INLINE void _mco_init_desc_sizes(mco_desc* desc, size_t stack_size) {
+inline MCO_FORCE_INLINE void _mco_init_desc_sizes(mco_desc* desc, size_t stack_size) {
   desc->coro_size = _mco_align_forward(sizeof(mco_coro), 16) +
                     _mco_align_forward(sizeof(_mco_context), 16) +
                     _mco_align_forward(desc->storage_size, 16) +
@@ -1480,15 +1481,15 @@ typedef struct _mco_context {
   emscripten_fiber_t* back_fib;
 } _mco_context;
 
-static emscripten_fiber_t* running_fib = NULL;
-static unsigned char main_asyncify_stack[MCO_ASYNCFY_STACK_SIZE];
-static emscripten_fiber_t main_fib;
+inline emscripten_fiber_t* running_fib = NULL;
+inline unsigned char main_asyncify_stack[MCO_ASYNCFY_STACK_SIZE];
+inline emscripten_fiber_t main_fib;
 
-static void _mco_wrap_main(void* co) {
+inline void _mco_wrap_main(void* co) {
   _mco_main((mco_coro*)co);
 }
 
-static void _mco_jumpin(mco_coro* co) {
+inline void _mco_jumpin(mco_coro* co) {
   _mco_context* context = (_mco_context*)co->context;
   emscripten_fiber_t* back_fib = running_fib;
   if(!back_fib) {
@@ -1501,14 +1502,14 @@ static void _mco_jumpin(mco_coro* co) {
   emscripten_fiber_swap(back_fib, &context->fib); /* Do the context switch. */
 }
 
-static void _mco_jumpout(mco_coro* co) {
+inline void _mco_jumpout(mco_coro* co) {
   _mco_context* context = (_mco_context*)co->context;
   running_fib = context->back_fib;
   _mco_prepare_jumpout(co);
   emscripten_fiber_swap(&context->fib, context->back_fib); /* Do the context switch. */
 }
 
-static mco_result _mco_create_context(mco_coro* co, mco_desc* desc) {
+inline mco_result _mco_create_context(mco_coro* co, mco_desc* desc) {
   if(emscripten_has_asyncify() != 1) {
     MCO_LOG("failed to create fiber because ASYNCIFY is not enabled");
     return MCO_MAKE_CONTEXT_ERROR;
@@ -1539,12 +1540,12 @@ static mco_result _mco_create_context(mco_coro* co, mco_desc* desc) {
   return MCO_SUCCESS;
 }
 
-static void _mco_destroy_context(mco_coro* co) {
+inline void _mco_destroy_context(mco_coro* co) {
   /* Nothing to do. */
   _MCO_UNUSED(co);
 }
 
-static MCO_FORCE_INLINE void _mco_init_desc_sizes(mco_desc* desc, size_t stack_size) {
+inline MCO_FORCE_INLINE void _mco_init_desc_sizes(mco_desc* desc, size_t stack_size) {
   desc->coro_size = _mco_align_forward(sizeof(mco_coro), 16) +
                     _mco_align_forward(sizeof(_mco_context), 16) +
                     _mco_align_forward(desc->storage_size, 16) +
@@ -1581,7 +1582,7 @@ __attribute__((import_module("asyncify"), import_name("stop_unwind")))  void _as
 __attribute__((import_module("asyncify"), import_name("start_rewind"))) void _asyncify_start_rewind(void*);
 __attribute__((import_module("asyncify"), import_name("stop_rewind")))  void _asyncify_stop_rewind();
 
-MCO_NO_INLINE void _mco_jumpin(mco_coro* co) {
+inline MCO_NO_INLINE void _mco_jumpin(mco_coro* co) {
   _mco_context* context = (_mco_context*)co->context;
   _mco_prepare_jumpin(co);
   if(context->rewind_id > 0) { /* Begin rewinding until last yield point. */
@@ -1591,7 +1592,7 @@ MCO_NO_INLINE void _mco_jumpin(mco_coro* co) {
   _asyncify_stop_unwind(); /* Stop saving coroutine stack. */
 }
 
-static MCO_NO_INLINE void _mco_finish_jumpout(mco_coro* co, volatile int rewind_id) {
+inline MCO_NO_INLINE void _mco_finish_jumpout(mco_coro* co, volatile int rewind_id) {
   _mco_context* context = (_mco_context*)co->context;
   int next_rewind_id = context->rewind_id + 1;
   if(rewind_id == next_rewind_id) { /* Begins unwinding the stack (save locals and call stack to rewind later) */
@@ -1604,18 +1605,19 @@ static MCO_NO_INLINE void _mco_finish_jumpout(mco_coro* co, volatile int rewind_
   /* Otherwise, we should be rewinding, let it continue... */
 }
 
-MCO_NO_INLINE void _mco_jumpout(mco_coro* co) {
-  _mco_context* context = (_mco_context*)co->context;
-  /*
-  Save rewind point into a local, that should be restored when rewinding.
-  That is "rewind_id != co->rewind_id + 1" may be true when rewinding.
-  Use volatile here just to be safe from compiler optimizing this out.
-  */
-  volatile int rewind_id = context->rewind_id + 1;
-  _mco_finish_jumpout(co, rewind_id);
+inline MCO_NO_INLINE void _mco_jumpout(mco_coro *co)
+{
+    _mco_context *context = (_mco_context *)co->context;
+    /*
+    Save rewind point into a local, that should be restored when rewinding.
+    That is "rewind_id != co->rewind_id + 1" may be true when rewinding.
+    Use volatile here just to be safe from compiler optimizing this out.
+    */
+    volatile int rewind_id = context->rewind_id + 1;
+    _mco_finish_jumpout(co, rewind_id);
 }
 
-static mco_result _mco_create_context(mco_coro* co, mco_desc* desc) {
+inline mco_result _mco_create_context(mco_coro* co, mco_desc* desc) {
   /* Determine the context address. */
   size_t co_addr = (size_t)co;
   size_t context_addr = _mco_align_forward(co_addr + sizeof(mco_coro), 16);
@@ -1639,12 +1641,12 @@ static mco_result _mco_create_context(mco_coro* co, mco_desc* desc) {
   return MCO_SUCCESS;
 }
 
-static void _mco_destroy_context(mco_coro* co) {
+inline void _mco_destroy_context(mco_coro* co) {
   /* Nothing to do. */
   _MCO_UNUSED(co);
 }
 
-static MCO_FORCE_INLINE void _mco_init_desc_sizes(mco_desc* desc, size_t stack_size) {
+inline MCO_FORCE_INLINE void _mco_init_desc_sizes(mco_desc* desc, size_t stack_size) {
   desc->coro_size = _mco_align_forward(sizeof(mco_coro), 16) +
                     _mco_align_forward(sizeof(_mco_context), 16) +
                     _mco_align_forward(desc->storage_size, 16) +
@@ -1657,7 +1659,7 @@ static MCO_FORCE_INLINE void _mco_init_desc_sizes(mco_desc* desc, size_t stack_s
 
 /* ---------------------------------------------------------------------------------------------- */
 
-mco_desc mco_desc_init(void (*func)(mco_coro* co), size_t stack_size) {
+inline mco_desc mco_desc_init(void (*func)(mco_coro* co), size_t stack_size) {
   if(stack_size != 0) {
     /* Stack size should be at least `MCO_MIN_STACK_SIZE`. */
     if(stack_size < MCO_MIN_STACK_SIZE) {
@@ -1680,7 +1682,7 @@ mco_desc mco_desc_init(void (*func)(mco_coro* co), size_t stack_size) {
   return desc;
 }
 
-static mco_result _mco_validate_desc(mco_desc* desc) {
+inline mco_result _mco_validate_desc(mco_desc* desc) {
   if(!desc) {
     MCO_LOG("coroutine description is NULL");
     return MCO_INVALID_ARGUMENTS;
@@ -1700,7 +1702,7 @@ static mco_result _mco_validate_desc(mco_desc* desc) {
   return MCO_SUCCESS;
 }
 
-mco_result mco_init(mco_coro* co, mco_desc* desc) {
+inline mco_result mco_init(mco_coro* co, mco_desc* desc) {
   if(!co) {
     MCO_LOG("attempt to initialize an invalid coroutine");
     return MCO_INVALID_COROUTINE;
@@ -1727,7 +1729,7 @@ mco_result mco_init(mco_coro* co, mco_desc* desc) {
   return MCO_SUCCESS;
 }
 
-mco_result mco_uninit(mco_coro* co) {
+inline mco_result mco_uninit(mco_coro* co) {
   if(!co) {
     MCO_LOG("attempt to uninitialize an invalid coroutine");
     return MCO_INVALID_COROUTINE;
@@ -1749,7 +1751,7 @@ mco_result mco_uninit(mco_coro* co) {
   return MCO_SUCCESS;
 }
 
-mco_result mco_create(mco_coro** out_co, mco_desc* desc) {
+inline mco_result mco_create(mco_coro** out_co, mco_desc* desc) {
   /* Validate input. */
   if(!out_co) {
     MCO_LOG("coroutine output pointer is NULL");
@@ -1778,7 +1780,7 @@ mco_result mco_create(mco_coro** out_co, mco_desc* desc) {
   return MCO_SUCCESS;
 }
 
-mco_result mco_destroy(mco_coro* co) {
+inline mco_result mco_destroy(mco_coro* co) {
   if(!co) {
     MCO_LOG("attempt to destroy an invalid coroutine");
     return MCO_INVALID_COROUTINE;
@@ -1796,7 +1798,7 @@ mco_result mco_destroy(mco_coro* co) {
   return MCO_SUCCESS;
 }
 
-mco_result mco_resume(mco_coro* co) {
+inline mco_result mco_resume(mco_coro* co) {
   if(!co) {
     MCO_LOG("attempt to resume an invalid coroutine");
     return MCO_INVALID_COROUTINE;
@@ -1810,7 +1812,7 @@ mco_result mco_resume(mco_coro* co) {
   return MCO_SUCCESS;
 }
 
-mco_result mco_yield(mco_coro* co) {
+inline mco_result mco_yield(mco_coro* co) {
   if(!co) {
     MCO_LOG("attempt to yield an invalid coroutine");
     return MCO_INVALID_COROUTINE;
@@ -1837,21 +1839,23 @@ mco_result mco_yield(mco_coro* co) {
   return MCO_SUCCESS;
 }
 
-mco_state mco_status(mco_coro* co) {
-  if(co != NULL) {
-    return co->state;
-  }
-  return MCO_DEAD;
+inline mco_state mco_status(mco_coro *co)
+{
+    if (co != NULL)
+    {
+        return co->state;
+    }
+    return MCO_DEAD;
 }
 
-void* mco_get_user_data(mco_coro* co) {
+inline void* mco_get_user_data(mco_coro* co) {
   if(co != NULL) {
     return co->user_data;
   }
   return NULL;
 }
 
-mco_result mco_push(mco_coro* co, const void* src, size_t len) {
+inline mco_result mco_push(mco_coro* co, const void* src, size_t len) {
   if(!co) {
     MCO_LOG("attempt to use an invalid coroutine");
     return MCO_INVALID_COROUTINE;
@@ -1871,7 +1875,7 @@ mco_result mco_push(mco_coro* co, const void* src, size_t len) {
   return MCO_SUCCESS;
 }
 
-mco_result mco_pop(mco_coro* co, void* dest, size_t len) {
+inline mco_result mco_pop(mco_coro* co, void* dest, size_t len) {
   if(!co) {
     MCO_LOG("attempt to use an invalid coroutine");
     return MCO_INVALID_COROUTINE;
@@ -1893,11 +1897,13 @@ mco_result mco_pop(mco_coro* co, void* dest, size_t len) {
   return MCO_SUCCESS;
 }
 
-mco_result mco_peek(mco_coro* co, void* dest, size_t len) {
-  if(!co) {
-    MCO_LOG("attempt to use an invalid coroutine");
-    return MCO_INVALID_COROUTINE;
-  } else if(len > 0) {
+inline mco_result mco_peek(mco_coro *co, void *dest, size_t len)
+{
+    if (!co)
+    {
+        MCO_LOG("attempt to use an invalid coroutine");
+        return MCO_INVALID_COROUTINE;
+    } else if(len > 0) {
     if(len > co->bytes_stored) {
       MCO_LOG("attempt to peek too many bytes from coroutine storage");
       return MCO_NOT_ENOUGH_SPACE;
@@ -1911,14 +1917,14 @@ mco_result mco_peek(mco_coro* co, void* dest, size_t len) {
   return MCO_SUCCESS;
 }
 
-size_t mco_get_bytes_stored(mco_coro* co) {
+inline size_t mco_get_bytes_stored(mco_coro* co) {
   if(co == NULL) {
     return 0;
   }
   return co->bytes_stored;
 }
 
-size_t mco_get_storage_size(mco_coro* co) {
+inline size_t mco_get_storage_size(mco_coro* co) {
   if(co == NULL) {
     return 0;
   }
@@ -1926,14 +1932,14 @@ size_t mco_get_storage_size(mco_coro* co) {
 }
 
 #ifdef MCO_NO_MULTITHREAD
-mco_coro* mco_running(void) {
+inline mco_coro* mco_running(void) {
   return mco_current_co;
 }
 #else
-static MCO_NO_INLINE mco_coro* _mco_running(void) {
+inline MCO_NO_INLINE mco_coro* _mco_running(void) {
   return mco_current_co;
 }
-mco_coro* mco_running(void) {
+inline mco_coro* mco_running(void) {
   /*
   Compilers aggressively optimize the use of TLS by caching loads.
   Since fiber code can migrate between threads it’s possible for the load to be stale.
@@ -1944,7 +1950,7 @@ mco_coro* mco_running(void) {
 }
 #endif
 
-const char* mco_result_description(mco_result res) {
+inline const char* mco_result_description(mco_result res) {
   switch(res) {
     case MCO_SUCCESS:
       return "No error";

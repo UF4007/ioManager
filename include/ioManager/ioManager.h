@@ -540,11 +540,13 @@ namespace io
             inline bool operator==(io::future_tag &fut) { return fut.awaiter == this->awaiter; }
             inline operator bool() { return awaiter != nullptr; }
             operator int() = delete;
-            future_tag(lowlevel::awaiter* awa) :awaiter(awa) {}
+            future_tag(future&& fut) :awaiter(fut.awaiter) {}
+            future_tag(future& fut) :awaiter(fut.awaiter) {}
             future_tag() {}
         private:
             //never use this pointer.
             lowlevel::awaiter* awaiter = nullptr;
+            future_tag(lowlevel::awaiter* awa) :awaiter(awa) {}
         };
 
         //future with data. Not moveable and copyable.
@@ -925,7 +927,7 @@ namespace io
             all = 0,
             any = 1,
             race = 2,
-            allSettle = 3
+            allSettle = 3     // I suggest never use it, instead, loop and co_await one by one.
         };
 
         //scheduler, executor
@@ -934,19 +936,22 @@ namespace io
             __IO_INTERNAL_HEADER_PERMISSION;
             inline manager() {}
             inline void drive(){
+                io::lowlevel::this_thread = this;
+
                 //pending task
-                while (1)
+                std::queue<std::coroutine_handle<>> pendingTaskReady;
+                while (spinLock_pd.test_and_set(std::memory_order_acquire));
+                pendingTaskReady = std::move(pendingTask);
+                spinLock_pd.clear(std::memory_order_release);
+                while(1)
                 {
-                    while (spinLock_pd.test_and_set(std::memory_order_acquire));
-                    if (pendingTask.size())
+                    if (pendingTaskReady.size())
                     {
-                        auto i = pendingTask.front();
-                        pendingTask.pop();
-                        spinLock_pd.clear(std::memory_order_release);
+                        auto i = pendingTaskReady.front();
+                        pendingTaskReady.pop();
                         i.resume();
                         continue;
                     }
-                    spinLock_pd.clear(std::memory_order_release);
                     break;
                 }
 
@@ -1060,6 +1065,16 @@ namespace io
                     i.destroy();
                 }
 
+                //deconstructed stackful
+#if IO_USE_STACKFUL
+                while (stackful_deconstruct.size())
+                {
+                    auto i = stackful_deconstruct.front();
+                    stackful_deconstruct.pop();
+                    minicoro_detail::mco_destroy(i);
+                }
+#endif
+
                 //suspend
                 if (is_suspend.test() == false)
                 {
@@ -1071,6 +1086,8 @@ namespace io
 #endif
                 }
                 is_suspend.clear();
+
+                io::lowlevel::this_thread = nullptr;
             }
             
 #if IO_USE_ASIO
@@ -1303,6 +1320,12 @@ namespace io
             std::queue<std::coroutine_handle<>> delay_deconstruct;  //coroutines on call chain and needs deconstruct.
 
             std::chrono::nanoseconds suspend_max = std::chrono::nanoseconds(400000000);   //defalut 400ms
+
+#if IO_USE_STACKFUL
+            io::minicoro_detail::mco_coro *current_stackful = nullptr;
+
+            std::queue<io::minicoro_detail::mco_coro*> stackful_deconstruct;
+#endif
 
 #if IO_USE_ASIO
             // use run_until in io_context
@@ -1907,6 +1930,101 @@ namespace io
             struct function_traits : public function_traits<decltype(&F::operator())> {};
         };
 
+
+
+        // -------------------------------this manager-----------------------------------------
+        inline manager* this_manager() {return lowlevel::this_thread;}
+        constexpr const char* outside_manager_error_msg = 
+            "io::manager ERROR: manager function must be called from within a manager context.";
+#if IO_USE_ASIO
+        template <typename T, typename Executor>
+        inline void fromAsio(future& fut, asio::awaitable<T, Executor>&& awaitable_obj) {
+            IO_ASSERT(
+                io::lowlevel::this_thread != nullptr,
+                outside_manager_error_msg
+            );
+            return io::lowlevel::this_thread->fromAsio(fut, std::move(awaitable_obj));
+        }
+        template <typename T, typename Executor>
+        inline void fromAsio(future_with<T>& fut, asio::awaitable<T, Executor>&& awaitable_obj) {
+            IO_ASSERT(
+                io::lowlevel::this_thread != nullptr,
+                outside_manager_error_msg
+            );
+            return io::lowlevel::this_thread->fromAsio(fut, std::move(awaitable_obj));
+        }
+        
+        inline asio::io_context& getAsioContext() {
+            IO_ASSERT(
+                io::lowlevel::this_thread != nullptr,
+                outside_manager_error_msg
+            );
+            return io::lowlevel::this_thread->getAsioContext();
+        }
+#endif
+        template <typename T_spawn>
+        [[nodiscard]] inline fsm_handle<T_spawn> spawn_later(fsm_func<T_spawn> new_fsm) {
+            IO_ASSERT(
+                io::lowlevel::this_thread != nullptr,
+                outside_manager_error_msg
+            );
+            return io::lowlevel::this_thread->spawn_later(std::move(new_fsm));
+        }
+        template <typename T_Prom>
+        inline promise<T_Prom> make_future(future& fut, T_Prom* mem_bind) {
+            IO_ASSERT(
+                io::lowlevel::this_thread != nullptr,
+                outside_manager_error_msg
+            );
+            return io::lowlevel::this_thread->make_future(fut, mem_bind);
+        }
+        inline promise<void> make_future(future& fut) {
+            IO_ASSERT(
+                io::lowlevel::this_thread != nullptr,
+                outside_manager_error_msg
+            );
+            return io::lowlevel::this_thread->make_future(fut);
+        }
+        template <typename T_Duration>
+        inline void make_clock(clock& fut, T_Duration duration, bool isResolve = false) {
+            IO_ASSERT(
+                io::lowlevel::this_thread != nullptr,
+                outside_manager_error_msg
+            );
+            return io::lowlevel::this_thread->make_clock(fut, duration, isResolve);
+        }
+        inline void make_outdated_clock(clock& fut, bool isResolve = false) {
+            IO_ASSERT(
+                io::lowlevel::this_thread != nullptr,
+                outside_manager_error_msg
+            );
+            return io::lowlevel::this_thread->make_outdated_clock(fut, isResolve);
+        }
+        inline async_promise make_future(async_future& fut) {
+            IO_ASSERT(
+                io::lowlevel::this_thread != nullptr,
+                outside_manager_error_msg
+            );
+            return io::lowlevel::this_thread->make_future(fut);
+        }
+        template <typename T_spawn>
+        [[nodiscard]] inline io::fsm_handle<T_spawn> spawn_now(fsm_func<T_spawn> new_fsm) {
+            IO_ASSERT(
+                io::lowlevel::this_thread != nullptr,
+                outside_manager_error_msg
+            );
+            new_fsm._data->_fsm.mngr = io::lowlevel::this_thread;
+            std::coroutine_handle<fsm_promise<T_spawn>> h;
+            h = h.from_promise(*new_fsm._data);
+            h.resume();
+            return {new_fsm._data};
+        }
+
+
 #include "internal/definitions.h"
     }
 }
+
+#if IO_USE_STACKFUL
+#include "internal/stackful.h"
+#endif
