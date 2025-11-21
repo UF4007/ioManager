@@ -1,5 +1,27 @@
 class lowlevel {
     __IO_INTERNAL_HEADER_PERMISSION
+
+    friend manager* this_manager();
+    friend void drive();
+    friend promise<void> make_future(future& fut);
+#if IO_USE_ASIO
+    template <typename T, typename Executor>
+    friend void fromAsio(future& fut, asio::awaitable<T, Executor>&& awaitable_obj);
+    template <typename T, typename Executor>
+    friend void fromAsio(future_with<T>& fut, asio::awaitable<T, Executor>&& awaitable_obj);
+    friend asio::io_context& getAsioContext();
+#endif
+    template <typename T_spawn>
+    friend fsm_handle<T_spawn> spawn_later(fsm_func<T_spawn> new_fsm);
+    template <typename T_Prom>
+    friend promise<T_Prom> make_future(future& fut, T_Prom* mem_bind);
+    template <typename T_Duration>
+    friend void make_clock(clock& fut, T_Duration duration, bool isResolve);
+    friend void make_outdated_clock(clock& fut, bool isResolve);
+    friend async_promise make_future(async_future& fut);
+
+    inline thread_local static manager *this_thread = nullptr;
+
     struct awaiter;
     struct await_queue {
         lowlevel::awaiter* queue = nullptr;

@@ -85,3 +85,17 @@
 #include "../asio/asio/awaitable.hpp"
 #include "../asio/asio/dispatch.hpp"
 #endif
+
+#if IO_USE_OPENSSL
+#endif
+
+#if IO_USE_STACKFUL
+#define MINICORO_IMPL
+namespace io {
+    inline namespace IO_LIB_VERSION___ {
+        namespace minicoro_detail {
+#include "../minicoro/minicoro.h"
+        }
+    }
+}
+#endif

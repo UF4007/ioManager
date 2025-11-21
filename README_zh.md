@@ -35,6 +35,7 @@
 - **chan**：Go风格的io::chan和io::async::chan，用于协程间通信、线程间通信
 - **RAII友好**：资源管理遵循RAII原则，确保安全性和可靠性
 - **高性能**：接近原生C++协程的速度
+- **有栈协程**：与无栈协程使用相同的future/promise等待子；无栈跑得快，有栈应用广，我们全都要！
 
 ## 目录
 
@@ -794,10 +795,13 @@ GCC下的速度甚至更快，已接近原生 C++20 协程的性能。
 - 使用[Asio](https://think-async.com/Asio/)提供网络支持
 - KCP协议实现基于[ikcp](https://github.com/skywind3000/kcp)  
 - HTTP解析由[llhttp](https://github.com/nodejs/llhttp)提供支持  
+- 有栈协程由[minicoro](https://github.com/edubart/minicoro)实现
 
 ## 杂项
 
 ### io::pool 线程池工具类
+
+**TODO**：让manager由负载均衡器，自动运行在不同的线程内。很快就会实现这个。
 
 ```cpp
 // 创建线程池，指定线程数量（manager数量）

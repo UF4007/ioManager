@@ -43,6 +43,7 @@ io::manager provides a comprehensive solution for building efficient, concurrent
 - **Channel-based Communication**: Golang-style channels and async channels for inter-coroutine communication and inter-thread communication
 - **RAII Friendly**: Resource management follows RAII principles for safety and reliability
 - **High Performance**: Close to the speed of native C++ coroutines, supporting more than 100M coroutines per second switch speed in a single thread
+- **Stackful coroutines**: The same future/promise awaiter was used in stackless coroutines; stackless runs faster, stackful is more widely used—we want both!
 
 ## Table of Contents
 
@@ -824,6 +825,7 @@ Contributions are welcome! Feel free to open issues or submit pull requests on G
 - Uses [Asio](https://think-async.com/Asio/) for network support
 - KCP protocol implementation based on [ikcp](https://github.com/skywind3000/kcp)
 - HTTP parsing powered by [llhttp](https://github.com/nodejs/llhttp)
+- stackful coroutine powered by [minicoro](https://github.com/edubart/minicoro)
 
 ## MISC
 
