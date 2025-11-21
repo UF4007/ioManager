@@ -89,30 +89,30 @@ class lowlevel {
                     awaiter->coro != nullptr);
         }
         inline bool resolve() {
-            bool ret = false;
-            if (valid())
+            promise_base moved;
+            moved.awaiter = this->awaiter;
+            this->awaiter = nullptr;
+            if (moved.valid())
             {
-                awaiter->bit_set |= awaiter->occupy_lock;
-                this->awaiter->set();
-                ret = true;
+                moved.awaiter->bit_set |= moved.awaiter->occupy_lock;
+                moved.awaiter->set();
+                return true;
             }
-            this->decons();
-            awaiter = nullptr;
-            return ret;
+            return false;
         }
         inline bool resolve_later();
         inline bool reject(std::error_code ec) {
-            bool ret = false;
-            if (valid())
+            promise_base moved;
+            moved.awaiter = this->awaiter;
+            this->awaiter = nullptr;
+            if (moved.valid())
             {
-                this->awaiter->no_tm.err = ec;
-                awaiter->bit_set |= awaiter->occupy_lock;
-                this->awaiter->set();
-                ret = true;
+                moved.awaiter->no_tm.err = ec;
+                moved.awaiter->bit_set |= moved.awaiter->occupy_lock;
+                moved.awaiter->set();
+                return true;
             }
-            this->decons();
-            awaiter = nullptr;
-            return ret;
+            return false;
         }
         inline bool reject_later(std::error_code ec);
         inline bool reject(std::errc ec) { return reject(std::make_error_code(ec)); }

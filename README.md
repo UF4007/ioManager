@@ -285,6 +285,7 @@ io::fsm_func<void> consumer_coroutine(io::future fut)
 ```
 
 > **Note:** After `prom.resolve()` is called, the promise become invalid and the future cannot be used for await operations. Must use the relative make() function for reuse.
+> - When a left-value future is being awaited, attempting to operate on it results in undefined behavior.
 
 #### Passing Data with Future/Promise
 
@@ -746,13 +747,33 @@ Benchmark results on Windows environment (MSVC VS2022) with Intel Core i5-9300HF
 
 ### Coroutine Performance
 
- In 30000 coroutines:
+#### Stackless Coroutines (C++20 coroutine)
 
-- Average coroutine creation rate: ~4.8 million per second
-- Average creation time: ~208 nanoseconds
+In 30000 coroutines:
 
-- Average switching rate: ~115 million switches per second
-- Average switch time: ~8.7 nanoseconds
+- Average coroutine creation rate: ~5.13 million per second
+- Average creation time: ~195 nanoseconds
+
+- Average switching rate: ~10.65 million switches per second
+- Average switch time: ~93.9 nanoseconds
+
+#### Stackful Coroutines (minicoro)
+
+In 3000 coroutines:
+
+- Average coroutine creation rate: ~138k per second
+- Average creation time: ~7.22 microseconds
+
+- Average switching rate: ~8.51 million switches per second
+- Average switch time: ~117.6 nanoseconds
+
+**Performance Comparison:**
+
+| Metric | Stackless | Stackful | Difference |
+|--------|-----------|----------|------------|
+| Creation Speed | 195 ns | 7223 ns | **37x slower** |
+| Switch Speed | 93.9 ns | 117.6 ns | **1.25x slower** |
+| Concurrency Scale | 30000+ | < 1000 | - |
 
 *The implementation of this benchmark can be found in `demo/core/coro_benchmark.cpp`.*
 

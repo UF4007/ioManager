@@ -45,7 +45,7 @@ namespace io
             template <typename Func, typename... Args>
             inline bool spawn_stacksize(size_t stack_size, Func &&func, Args &&...args)
             {
-                auto ctx = minicoro_detail::stackful_context{
+                auto ctx = minicoro_detail::stackful_context<Func, Args...>{
                     std::forward<Func>(func),
                     std::forward<Args>(args)...};
 
