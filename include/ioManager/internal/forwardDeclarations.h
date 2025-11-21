@@ -23,7 +23,7 @@
                                                                     template <typename T_spawn2> friend fsm_handle<T_spawn2> spawn_now(fsm_func<T_spawn2> new_fsm);\
 																	friend void io::minicoro_detail::resume(minicoro_detail::mco_coro* co);\
 																	template <typename Func2, typename... Args2> friend void io::minicoro_detail::stackful_coro_entry(minicoro_detail::mco_coro* co);\
-																	template <typename Func2, typename... Args2> friend bool io::stackful::spawn(Func2&& func, Args2 &&...args);\
+																	template <typename Func2, typename... Args2> friend bool io::stackful::spawn_stacksize(size_t stack_size, Func2&& func, Args2 &&...args);\
 																	template <typename T2> friend io::future_tag io::stackful::await(T2&& fut);\
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -104,9 +104,9 @@ namespace minicoro_detail {
 	void stackful_coro_entry(minicoro_detail::mco_coro* co);
 }
 namespace stackful {
-	template <typename Func, typename... Args>
-	bool spawn(Func&& func, Args &&...args);
-	template <typename T>
+    template <typename Func, typename... Args>
+    bool spawn_stacksize(size_t stack_size, Func &&func, Args &&...args);
+    template <typename T>
 	io::future_tag await(T&& fut);
 }
 #endif

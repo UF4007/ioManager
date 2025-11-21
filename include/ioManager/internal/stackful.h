@@ -43,7 +43,7 @@ namespace io
         namespace stackful
         {
             template <typename Func, typename... Args>
-            inline bool spawn(Func &&func, Args &&...args)
+            inline bool spawn_stacksize(size_t stack_size, Func &&func, Args &&...args)
             {
                 auto ctx = minicoro_detail::stackful_context{
                     std::forward<Func>(func),
@@ -51,7 +51,7 @@ namespace io
 
                 auto desc = minicoro_detail::mco_desc_init(
                     minicoro_detail::stackful_coro_entry<Func, Args...>,
-                    0
+                    stack_size
                 );
 
                 desc.user_data = &ctx;
@@ -71,6 +71,12 @@ namespace io
                 }
                 io::this_manager()->current_stackful = previous;
                 return true;
+            }
+
+            template <typename Func, typename... Args>
+            inline bool spawn(Func &&func, Args &&...args)
+            {
+                return spawn_stacksize(0, std::forward<Func>(func), std::forward<Args>(args)...);
             }
 
             template <typename T>
