@@ -1986,14 +1986,14 @@ namespace io
             return io::lowlevel::this_thread->make_future(fut);
         }
         template <typename T_Duration>
-        inline void make_clock(clock& fut, T_Duration duration, bool isResolve = false) {
+        inline void make_clock(clock& fut, T_Duration duration, bool isResolve) {
             IO_ASSERT(
                 io::lowlevel::this_thread != nullptr,
                 outside_manager_error_msg
             );
             return io::lowlevel::this_thread->make_clock(fut, duration, isResolve);
         }
-        inline void make_outdated_clock(clock& fut, bool isResolve = false) {
+        inline void make_outdated_clock(clock& fut, bool isResolve) {
             IO_ASSERT(
                 io::lowlevel::this_thread != nullptr,
                 outside_manager_error_msg

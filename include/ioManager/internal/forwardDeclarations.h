@@ -55,22 +55,25 @@ template <typename Front, typename Rear, typename Adaptor>struct pipeline_constr
 template <typename Front, typename Rear, typename Adaptor>struct pipeline;
 template <typename Pipeline, bool individual_coro, typename ErrorHandler>class pipeline_started;
 template <typename key, typename req, typename rsp>struct rpc;
-namespace sock {
-	struct tcp;
-	struct tcp_accp;
-	struct udp;
-};
-namespace minicoro_detail {
-	void resume(minicoro_detail::mco_coro* co);
-	template <typename Func, typename... Args>
-	void stackful_coro_entry(minicoro_detail::mco_coro* co);
-}
-namespace stackful {
-	template <typename Func, typename... Args>
-	bool spawn(Func&& func, Args &&...args);
-	template <typename T>
-	io::future_tag await(T&& fut);
-}
+
+manager* this_manager();
+void drive();
+promise<void> make_future(future& fut);
+#if IO_USE_ASIO
+template <typename T, typename Executor>
+void fromAsio(future& fut, asio::awaitable<T, Executor>&& awaitable_obj);
+template <typename T, typename Executor>
+void fromAsio(future_with<T>& fut, asio::awaitable<T, Executor>&& awaitable_obj);
+asio::io_context& getAsioContext();
+#endif
+template <typename T_spawn>
+fsm_handle<T_spawn> spawn_later(fsm_func<T_spawn> new_fsm);
+template <typename T_Prom>
+promise<T_Prom> make_future(future& fut, T_Prom* mem_bind);
+template <typename T_Duration>
+void make_clock(clock& fut, T_Duration duration, bool isResolve = false);
+void make_outdated_clock(clock& fut, bool isResolve = false);
+async_promise make_future(async_future& fut);
 
 #define IO_MANAGER_FORWARD_FUNC(___obj___,___func___) template <typename ...Args> auto ___func___(Args&&...args) { return ___obj___.___func___(std::forward<Args>(args)...); }
 
@@ -85,3 +88,25 @@ namespace stackful {
 #define ___DEFER_CONCAT_IMPL(x, y) x##y
 #define ___DEFER_CONCAT(x, y) ___DEFER_CONCAT_IMPL(x, y)
 #define IO_DEFER io::defer_t ___DEFER_CONCAT(defer_obj_, __LINE__)
+
+#if IO_USE_ASIO
+namespace sock {
+	struct tcp;
+	struct tcp_accp;
+	struct udp;
+};
+#endif
+
+#if IO_USE_STACKFUL
+namespace minicoro_detail {
+	void resume(minicoro_detail::mco_coro* co);
+	template <typename Func, typename... Args>
+	void stackful_coro_entry(minicoro_detail::mco_coro* co);
+}
+namespace stackful {
+	template <typename Func, typename... Args>
+	bool spawn(Func&& func, Args &&...args);
+	template <typename T>
+	io::future_tag await(T&& fut);
+}
+#endif
