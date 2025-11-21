@@ -92,6 +92,7 @@ namespace io
                 };
                 fut.awaiter->coro = &coro_set;
                 minicoro_detail::mco_yield(previous);
+                fut.awaiter->coro = nullptr;
                 io::this_manager()->current_stackful = previous;
 
                 return fut;
