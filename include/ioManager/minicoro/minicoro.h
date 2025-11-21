@@ -557,14 +557,14 @@ void __tsan_switch_to_fiber(void* fiber, unsigned flags);
 #include <string.h> /* For memcpy and memset. */
 
 /* Utility for aligning addresses. */
-inline MCO_FORCE_INLINE size_t _mco_align_forward(size_t addr, size_t align) {
+MCO_FORCE_INLINE size_t _mco_align_forward(size_t addr, size_t align) {
   return (addr + (align-1)) & ~(align-1);
 }
 
 /* Variable holding the current running coroutine per thread. */
 inline MCO_THREAD_LOCAL mco_coro* mco_current_co = NULL;
 
-inline MCO_FORCE_INLINE void _mco_prepare_jumpin(mco_coro* co) {
+MCO_FORCE_INLINE void _mco_prepare_jumpin(mco_coro* co) {
   /* Set the old coroutine to normal state and update it. */
   mco_coro* prev_co = mco_running(); /* Must access through `mco_running`. */
   MCO_ASSERT(co->prev_co == NULL);
@@ -589,7 +589,7 @@ inline MCO_FORCE_INLINE void _mco_prepare_jumpin(mco_coro* co) {
 #endif
 }
 
-inline MCO_FORCE_INLINE void _mco_prepare_jumpout(mco_coro* co) {
+MCO_FORCE_INLINE void _mco_prepare_jumpout(mco_coro* co) {
   /* Switch back to the previous running coroutine. */
   /* MCO_ASSERT(mco_running() == co); */
   mco_coro* prev_co = co->prev_co;
@@ -1368,7 +1368,7 @@ inline void _mco_destroy_context(mco_coro* co) {
 #endif
 }
 
-inline MCO_FORCE_INLINE void _mco_init_desc_sizes(mco_desc* desc, size_t stack_size) {
+MCO_FORCE_INLINE void _mco_init_desc_sizes(mco_desc* desc, size_t stack_size) {
   desc->coro_size = _mco_align_forward(sizeof(mco_coro), 16) +
                     _mco_align_forward(sizeof(_mco_context), 16) +
                     _mco_align_forward(desc->storage_size, 16) +

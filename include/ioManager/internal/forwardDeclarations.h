@@ -20,11 +20,11 @@
 																	template <typename Rear2, typename Front2, typename Adaptor2>friend struct io::pipeline;\
 																	template <typename Pipeline2, bool individual_coro2, typename ErrorHandler2>friend class pipeline_started;\
 																	template <typename FSM_Index2, typename FSM_In2, typename FSM_Out2>friend struct io::rpc;\
-                                                                    template <typename T_spawn> friend fsm_handle<T_spawn> spawn_now(fsm_func<T_spawn> new_fsm);\
+                                                                    template <typename T_spawn2> friend fsm_handle<T_spawn2> spawn_now(fsm_func<T_spawn2> new_fsm);\
 																	friend void io::minicoro_detail::resume(minicoro_detail::mco_coro* co);\
-																	template <typename Func, typename... Args> friend void io::minicoro_detail::stackful_coro_entry(minicoro_detail::mco_coro* co);\
-																	template <typename Func, typename... Args> friend bool io::stackful::spawn(Func&& func, Args &&...args);\
-																	template <typename T> friend io::future_tag io::stackful::await(T&& fut);\
+																	template <typename Func2, typename... Args2> friend void io::minicoro_detail::stackful_coro_entry(minicoro_detail::mco_coro* co);\
+																	template <typename Func2, typename... Args2> friend bool io::stackful::spawn(Func2&& func, Args2 &&...args);\
+																	template <typename T2> friend io::future_tag io::stackful::await(T2&& fut);\
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------
 template <typename T, size_t batch_size>struct hive;
