@@ -336,42 +336,78 @@ io::fsm_func<void> data_producer(io::promise<std::string> prom)
 
 ### Error Handling
 
-Promises can also be rejected with an error code:
+Promises can be rejected with an error code or custom error messages:
+
+#### Rejecting with Error Code
 
 ```cpp
-io::fsm_func<void> error_example()
-{
     io::fsm<void> &fsm = co_await io::get_fsm;
     
     io::future fut;
     io::promise<void> prom = fsm.make_future(fut);
     
-    // Reject the promise with an error
+    // Reject the promise with an error code
     prom.reject(std::make_error_code(std::errc::operation_canceled));
-    
-    co_return;
-}
+    // aka prom.reject(std::errc::operation_canceled);
+```
 
-io::fsm_func<void> handle_errors(std::reference_wrapper<io::future> fut_ref)
-{
+#### Rejecting with Custom Error Messages
+
+Promises can also be rejected with custom string messages:
+
+```cpp
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    
+    io::future fut;
+    io::promise<std::string> prom = fsm.make_future(fut, &fut.data);
+    
+    // Reject with a string message (lvalue reference)
+    std::string error_msg = "Database connection failed";
+    prom.reject(error_msg);  // Uses string_view internally
+```
+
+**Important Note on String Messages:** When rejecting with a string message, the `std::error_code` returned by `fut.getErr()` has the same lifetime as the `future` object. The error message becomes invalid when:
+- The future is reset by calling `fsm.make_future()` again on the same future object
+- The future is destructed
+
+Therefore, always retrieve the error message immediately after `co_await` and before any operations that might invalidate the future:
+
+```cpp
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    
+    // Wait for the future
+    co_await fut_ref.get();
+    
+    // ✓ CORRECT: Access error message immediately
+    std::string error_msg = fut_ref.get().getErr().message();
+    std::cout << "Error: " << error_msg << std::endl;
+    
+    // ✗ WRONG: Do NOT store the error_code and use it later
+    // auto ec = fut_ref.get().getErr();
+    // ... some other operations ...
+    // std::cout << ec.message();  // UB: error_code may be invalid
+```
+
+#### Future Side Error Handling
+
+```cpp
     io::fsm<void> &fsm = co_await io::get_fsm;
     
     // Wait for the future to be resolved
-    co_await fut_ref.get();
+    co_await fut_ref;
     
     // Check for errors after awaiting
-    if (fut_ref.get().getErr())
+    if (fut_ref.getErr())
     {
-        std::cout << "Error: " << fut_ref.get().getErr().message() << std::endl;
+        std::cout << "Error: " << fut_ref.getErr().message() << std::endl;
     }
     else
     {
         std::cout << "Success!" << std::endl;
     }
-    
-    co_return;
-}
 ```
+
+This project does not use C++ exception handling.
 
 ### Combining Multiple Futures
 

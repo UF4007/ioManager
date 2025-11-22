@@ -391,6 +391,51 @@ namespace io
         template<typename T>
         struct is_future { static constexpr bool value = (io::is_future_with<T>::value || std::is_same_v<T, io::future>); };
 
+        struct dynamic_errc : public std::error_category {
+            constexpr static int err_invalid = 0;
+
+            const char *name() const noexcept override { return "io::promise has been rejected"; }
+            std::string message(int ev) const override {
+                if (ev > 0 && ev < msg_pool.size()) {
+                    return msg_pool[ev];
+                }
+                return msg_pool[0];
+            }
+
+            int assign(std::string_view msg) {
+                if (msg_released.size()) {
+                    size_t ind = msg_released.back();
+                    msg_released.pop_back();
+                    msg_pool[ind] = msg;
+                    return static_cast<int>(ind);
+                }
+                msg_pool.push_back(std::string(msg));
+                return static_cast<int>(msg_pool.size() - 1);
+            }
+
+            int assign(std::string&& msg) {
+                if (msg_released.size()) {
+                    size_t ind = msg_released.back();
+                    msg_released.pop_back();
+                    msg_pool[ind] = std::move(msg);
+                    return static_cast<int>(ind);
+                }
+                msg_pool.push_back(std::move(msg));
+                return static_cast<int>(msg_pool.size() - 1);
+            }
+
+            void release(int ind) {
+                if (ind >= 0 && ind < msg_pool.size()) {
+                    //msg_pool[ind].clear();
+                    msg_released.push_back(static_cast<size_t>(ind));
+                }
+            }
+
+        private:
+            std::vector<std::string> msg_pool = {"future resolved with no error."};
+            std::vector<size_t> msg_released;
+        };
+
         // -------------------------------coroutine core--------------------------------
 
 #include "internal/lowlevel.h"
@@ -860,6 +905,7 @@ namespace io
                 return *this;
             }
             inline void detach() { 
+                if (this->done()) return;
                 _fsm->_fsm.is_detached = true;
                 _fsm = nullptr;
             }
@@ -1320,6 +1366,8 @@ namespace io
             std::queue<std::coroutine_handle<>> delay_deconstruct;  //coroutines on call chain and needs deconstruct.
 
             std::chrono::nanoseconds suspend_max = std::chrono::nanoseconds(400000000);   //defalut 400ms
+
+            io::dynamic_errc errc_pool;
 
 #if IO_USE_STACKFUL
             io::minicoro_detail::mco_coro *current_stackful = nullptr;

@@ -34,6 +34,7 @@ class lowlevel {
         static constexpr int set_lock = 1 << 3;
         static constexpr int is_clock = 1 << 4;
         static constexpr int clock_resolve = 1 << 5;    // clock treated as resolve, rather than default reject.
+        static constexpr int has_dynamic_error = 1 << 6;
         static constexpr int initilaze = promise_handled | future_handled;
 
         int bit_set = initilaze;
@@ -54,10 +55,7 @@ class lowlevel {
             this->no_tm.err = std::error_code();
         }
         inline ~awaiter() {}
-        inline void reset() {
-            bit_set = initilaze;
-            this->no_tm.err = std::error_code();
-        };
+        void reset();
         inline void set() {
             this->bit_set |= set_lock;
             if (coro)
@@ -114,9 +112,16 @@ class lowlevel {
             }
             return false;
         }
-        inline bool reject_later(std::error_code ec);
+        bool reject_later(std::error_code ec);
         inline bool reject(std::errc ec) { return reject(std::make_error_code(ec)); }
         inline bool reject_later(std::errc ec) { return reject_later(std::make_error_code(ec)); }
+        bool reject(std::string_view message);
+        bool reject(std::string &&message);
+        inline bool reject(const char *message) { return reject(std::string_view(message)); }
+        bool reject_later(std::string_view message);
+        bool reject_later(std::string &&message);
+        inline bool reject_later(const char *message) { return reject_later(std::string_view(message)); }
+
     private:
         inline promise_base(lowlevel::awaiter* a) noexcept :awaiter(a) {}
         lowlevel::awaiter* awaiter = nullptr;

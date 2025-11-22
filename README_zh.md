@@ -315,42 +315,78 @@ io::fsm_func<void> data_producer(io::promise<std::string> prom)
 
 ### 错误处理
 
-Promise也可以使用错误代码reject：
+Promise可以使用错误代码或自定义错误消息进行reject：
+
+#### 使用错误代码Reject
 
 ```cpp
-io::fsm_func<void> error_example()
-{
     io::fsm<void> &fsm = co_await io::get_fsm;
     
     io::future fut;
     io::promise<void> prom = fsm.make_future(fut);
     
-    // 使用错误reject promise
+    // 使用错误代码reject promise
     prom.reject(std::make_error_code(std::errc::operation_canceled));
-    
-    co_return;
-}
+    // 或者简写为 prom.reject(std::errc::operation_canceled);
+```
 
-io::fsm_func<void> handle_errors(std::reference_wrapper<io::future> fut_ref)
-{
+#### 使用自定义错误消息Reject
+
+Promise也可以使用自定义字符串消息进行reject：
+
+```cpp
     io::fsm<void> &fsm = co_await io::get_fsm;
     
-    // 等待future被resolve 
+    io::future fut;
+    io::promise<std::string> prom = fsm.make_future(fut, &fut.data);
+    
+    // 使用字符串消息reject（左值引用）
+    std::string error_msg = "数据库连接失败";
+    prom.reject(error_msg);  // 内部使用string_view
+```
+
+**关于字符串消息的重要说明**：当使用字符串消息进行reject时，`fut.getErr()` 返回的 `std::error_code` 的生命周期与 `future` 对象相同。当以下情况发生时，错误消息会失效：
+- 在同一个future对象上再次调用 `fsm.make_future()` 重置future
+- future被析构
+
+因此，**必须在 `co_await` 之后立即检索错误消息**，并在任何可能使future失效的操作之前进行：
+
+```cpp
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    
+    // 等待future
     co_await fut_ref.get();
     
+    // ✓ 正确：立即访问错误消息
+    std::string error_msg = fut_ref.get().getErr().message();
+    std::cout << "错误: " << error_msg << std::endl;
+    
+    // ✗ 错误：不要存储error_code后再使用
+    // auto ec = fut_ref.get().getErr();
+    // ... 其他操作 ...
+    // std::cout << ec.message();  // UB: error_code可能已失效
+```
+
+#### 接收错误
+
+```cpp
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    
+    // 等待future被resolve
+    co_await fut_ref;
+    
     // 等待后检查错误
-    if (fut_ref.get().getErr())
+    if (fut_ref.getErr())
     {
-        std::cout << "错误: " << fut_ref.get().getErr().message() << std::endl;
+        std::cout << "错误: " << fut_ref.getErr().message() << std::endl;
     }
     else
     {
         std::cout << "成功！" << std::endl;
     }
-    
-    co_return;
-}
 ```
+
+这个项目不使用C++异常机制。
 
 ### 组合多个Future
 
