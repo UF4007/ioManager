@@ -25,7 +25,7 @@ io::fsm_func<void> helper_coroutine2(io::promise<std::string> prom)
 
     co_await fut1;
 
-    prom.reject("Network Error!");
+    fut1.rethrow(prom);
 
     co_return;
 }

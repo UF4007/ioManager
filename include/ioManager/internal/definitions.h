@@ -457,15 +457,14 @@ inline bool io::future::rethrow(io::lowlevel::promise_base& prom_base) {
     
     // If the error has dynamic error message (custom string)
     if (this->awaiter->bit_set & this->awaiter->has_dynamic_error) {
-        // Transfer the error code and the dynamic error reference directly
-        // without creating a new string
-        prom_base.awaiter = this->awaiter;
-        this->awaiter = nullptr;
-        
-        // Keep the has_dynamic_error flag so the error pool reference is maintained
+        // Transfer the error code and dynamic error flag directly
+        // without creating a new string (reuse the error pool reference)
         if (prom_base.valid()) {
-            prom_base.awaiter->bit_set |= prom_base.awaiter->occupy_lock;
-            prom_base.awaiter->set();
+            auto tmp = this->awaiter->no_tm.err;
+            this->awaiter->no_tm.err = std::error_code();
+            prom_base.awaiter->bit_set |= prom_base.awaiter->has_dynamic_error;
+            this->awaiter->bit_set &= ~(this->awaiter->has_dynamic_error);
+            prom_base.reject(tmp);
         }
     } else {
         // Regular error code without custom message - just copy the error code
