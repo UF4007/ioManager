@@ -527,6 +527,7 @@ namespace io
                 awaiter = nullptr;
             }
             promise<void> getPromise();
+            bool rethrow(io::lowlevel::promise_base& prom_base);
         private:
             future(clock&&) = delete;
             lowlevel::awaiter* awaiter = nullptr;
