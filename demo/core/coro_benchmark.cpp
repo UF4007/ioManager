@@ -58,50 +58,6 @@ io::fsm_func<void> benchmark()
 
 io::fsm_func<void> stackful_benchmark()
 {
-    constexpr size_t NUM_COROS = 300;
-
-    io::fsm<void>& fsm = co_await io::get_fsm;
-    std::vector<io::promise<void>> test_promises;
-
-    io::timer::up timer;
-    timer.start();
-
-    for (size_t i = 0; i < NUM_COROS; i++)
-    {
-        io::future fut;
-        io::promise<void> prom = fsm.make_future(fut);
-        test_promises.push_back(std::move(prom));
-
-        io::stackful::spawn_stacksize(1024, [](io::future fut)
-            { io::stackful::await(fut); }, std::move(fut));
-    }
-
-    auto duration_coro = std::chrono::duration_cast<std::chrono::microseconds>(timer.lap());
-
-    for (size_t i = 0; i < NUM_COROS; i++)
-    {
-        test_promises[i].resolve();
-    }
-
-    auto duration_loop = std::chrono::duration_cast<std::chrono::microseconds>(timer.lap());
-    double creates_per_sec = NUM_COROS * 1000000.0 / duration_coro.count();
-    double switches_per_sec = NUM_COROS * 1000000.0 / duration_loop.count();
-
-    std::cout << "Stackful Benchmark Results:\n"
-        << "Number of coroutines: " << NUM_COROS << "\n"
-        << "Total time: " << duration_coro.count() / 1000.0 << " ms\n"
-        << "Spawn per second: " << static_cast<size_t>(creates_per_sec) << "\n"
-        << "Average spawn time: " << duration_coro.count() / double(NUM_COROS) * 1000.0 << " ns\n\n"
-        << "Total switches: " << NUM_COROS << "\n"
-        << "Total time: " << duration_loop.count() / 1000.0 << " ms\n"
-        << "Switches per second: " << static_cast<size_t>(switches_per_sec) << "\n"
-        << "Average switch time: " << duration_loop.count() / double(NUM_COROS) * 1000.0 << " ns\n\n\n\n";
-
-    fsm.getManager()->spawn_later(stackful_benchmark()).detach();
-}
-
-io::fsm_func<void> stackful_benchmark()
-{
     constexpr size_t NUM_COROS = 3000;
     constexpr size_t ITERATION = 1000;
 
