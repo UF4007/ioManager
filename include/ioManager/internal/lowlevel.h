@@ -118,9 +118,17 @@ class lowlevel {
         bool reject(std::string_view message);
         bool reject(std::string &&message);
         inline bool reject(const char *message) { return reject(std::string_view(message)); }
+        template <typename... Args>
+        inline bool reject(std::format_string<Args...> fmt, Args&&... args) {
+            return reject(std::format(fmt, std::forward<Args>(args)...));
+        }
         bool reject_later(std::string_view message);
         bool reject_later(std::string &&message);
         inline bool reject_later(const char *message) { return reject_later(std::string_view(message)); }
+        template <typename... Args>
+        inline bool reject_later(std::format_string<Args...> fmt, Args&&... args) {
+            return reject_later(std::format(fmt, std::forward<Args>(args)...));
+        }
 
     private:
         inline promise_base(lowlevel::awaiter* a) noexcept :awaiter(a) {}

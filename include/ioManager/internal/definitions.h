@@ -448,6 +448,35 @@ inline void io::lowlevel::fsm_base::fromAsio(future_with<T>& fut, asio::awaitabl
 #endif
 
 
+//future
+inline bool io::future::rethrow(io::lowlevel::promise_base& prom_base) {
+    // Check if this future has an error
+    if (!this->awaiter || !(this->awaiter->no_tm.err)) {
+        return false;  // No error
+    }
+    
+    // If the error has dynamic error message (custom string)
+    if (this->awaiter->bit_set & this->awaiter->has_dynamic_error) {
+        // Transfer the error code and dynamic error flag directly
+        // without creating a new string (reuse the error pool reference)
+        if (prom_base.valid()) {
+            auto tmp = this->awaiter->no_tm.err;
+            this->awaiter->no_tm.err = std::error_code();
+            prom_base.awaiter->bit_set |= prom_base.awaiter->has_dynamic_error;
+            this->awaiter->bit_set &= ~(this->awaiter->has_dynamic_error);
+            prom_base.reject(tmp);
+        }
+    } else {
+        // Regular error code without custom message - just copy the error code
+        if (this->awaiter) {
+            prom_base.reject(this->awaiter->no_tm.err);
+        }
+    }
+    
+    return true;  // Had an error
+}
+
+
 //manager
 template <typename Func, typename ...Args>
 inline io::async_future io::manager::post(pool& thread_pool, Func func, Args&&... args)

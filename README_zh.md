@@ -384,9 +384,14 @@ Promise也可以使用自定义字符串消息进行reject：
     {
         std::cout << "成功！" << std::endl;
     }
+
+    // 或者转发给另一个promise
+    if (fut_ref.rethrow(prev_prom)) 
+        // future中有错误，则为true，无论转发是否成功。
+        // 转发成功，future中的错误码会立即失效；不成功则保留。
 ```
 
-这个项目不使用C++异常机制。
+这个项目不使用C++异常机制，协程捕获到异常会直接退出程序。
 
 ### 组合多个Future
 

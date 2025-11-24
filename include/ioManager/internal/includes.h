@@ -24,6 +24,7 @@
 #include <optional>
 #include <list>
 #include <atomic>
+#include <format>
 //_MSC_FULL_VER
 /**
  * Disable optimization for coroutine header in MSVC to prevent crashes.

@@ -572,6 +572,7 @@ namespace io
                 awaiter = nullptr;
             }
             promise<void> getPromise();
+            bool rethrow(io::lowlevel::promise_base& prom_base);
         private:
             future(clock&&) = delete;
             lowlevel::awaiter* awaiter = nullptr;
@@ -800,11 +801,11 @@ namespace io
                 }
                 template <bool returnTypeAsIndex, typename ...Args>
                 inline lowlevel::awaitable_base<T, returnTypeAsIndex, lowlevel::selector_status::all, Args...> await_transform(lowlevel::all<returnTypeAsIndex, Args...>&& x) {
-                    return lowlevel::awaitable_base<T, returnTypeAsIndex, lowlevel::selector_status::all, Args...>(*this, x.il);
+                    return lowlevel::awaitable_base<T, returnTypeAsIndex, lowlevel::selector_status::all, Args...>(*this, std::move(x.il));
                 }
                 template <bool returnTypeAsIndex, typename ...Args>
                 inline lowlevel::awaitable_base<T, returnTypeAsIndex, lowlevel::selector_status::any, Args...> await_transform(lowlevel::any<returnTypeAsIndex, Args...>&& x) {
-                    return lowlevel::awaitable_base<T, returnTypeAsIndex, lowlevel::selector_status::any, Args...>(*this, x.il);
+                    return lowlevel::awaitable_base<T, returnTypeAsIndex, lowlevel::selector_status::any, Args...>(*this, std::move(x.il));
                 }
                 template <bool returnTypeAsIndex, typename ...Args>
                 inline lowlevel::awaitable_base<T, returnTypeAsIndex, lowlevel::selector_status::race, Args...> await_transform(lowlevel::race<returnTypeAsIndex, Args...>&& x) {
@@ -812,7 +813,7 @@ namespace io
                 }
                 template <bool returnTypeAsIndex, typename ...Args>
                 inline lowlevel::awaitable_base<T, returnTypeAsIndex, lowlevel::selector_status::allsettle, Args...> await_transform(lowlevel::allSettle<returnTypeAsIndex, Args...>&& x) {
-                    return lowlevel::awaitable_base<T, returnTypeAsIndex, lowlevel::selector_status::allsettle, Args...>(*this, x.il);
+                    return lowlevel::awaitable_base<T, returnTypeAsIndex, lowlevel::selector_status::allsettle, Args...>(*this, std::move(x.il));
                 }
                 inline lowlevel::awa_initial_suspend<T> initial_suspend() { return lowlevel::awa_initial_suspend<T>(&_fsm); }
                 inline std::suspend_always final_suspend() noexcept { return {}; }

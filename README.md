@@ -405,9 +405,14 @@ Therefore, always retrieve the error message immediately after `co_await` and be
     {
         std::cout << "Success!" << std::endl;
     }
+    
+    // Or rethrow to the another promise
+    if (fut_ref.rethrow(prev_prom)) 
+        // If future got an error, returns true, nonetheless rethrow succeeded or not.
+        // If the rethrow has been successful, the error code in the future will immediately become invalid; otherwise, it will be retained.
 ```
 
-This project does not use C++ exception handling.
+This project does not use C++ exception handling. If a coroutine catches an exception, it will exit the program.
 
 ### Combining Multiple Futures
 

@@ -19,7 +19,13 @@ io::fsm_func<void> helper_coroutine2(io::promise<std::string> prom)
 
     co_await fsm.setTimeout(std::chrono::milliseconds(150));
 
-    prom.reject("Network Error!");
+    io::future_with<std::string> fut1;
+    io::promise<std::string> prom1 = fsm.make_future(fut1, &fut1.data);
+    fsm.spawn_now(helper_coroutine1(std::move(prom1))).detach();
+
+    co_await fut1;
+
+    fut1.rethrow(prom);
 
     co_return;
 }
@@ -37,8 +43,9 @@ io::fsm_func<void> main_coroutine()
 
     std::cout << "===== Waiting for helper coroutines =====" << std::endl;
 
-    std::cout << "\n--- Handling future 1 ---" << std::endl;
-    co_await fut1;
+    std::cout << "\n--- Handling future ---" << std::endl;
+    
+    co_await io::future::allSettle(fut1, fut2);
 
     if (fut1.getErr())
     {
@@ -48,9 +55,6 @@ io::fsm_func<void> main_coroutine()
     {
         std::cout << "Future 1 resolved: " << fut1.data << std::endl;
     }
-
-    std::cout << "\n--- Handling future 2 ---" << std::endl;
-    co_await fut2;
 
     if (fut2.getErr())
     {
