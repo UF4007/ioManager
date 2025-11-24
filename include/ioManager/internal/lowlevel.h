@@ -34,6 +34,7 @@ class lowlevel {
         static constexpr int set_lock = 1 << 3;
         static constexpr int is_clock = 1 << 4;
         static constexpr int clock_resolve = 1 << 5;    // clock treated as resolve, rather than default reject.
+        static constexpr int has_dynamic_error = 1 << 6;
         static constexpr int initilaze = promise_handled | future_handled;
 
         int bit_set = initilaze;
@@ -54,10 +55,7 @@ class lowlevel {
             this->no_tm.err = std::error_code();
         }
         inline ~awaiter() {}
-        inline void reset() {
-            bit_set = initilaze;
-            this->no_tm.err = std::error_code();
-        };
+        void reset();
         inline void set() {
             this->bit_set |= set_lock;
             if (coro)
@@ -89,32 +87,32 @@ class lowlevel {
                     awaiter->coro != nullptr);
         }
         inline bool resolve() {
-            bool ret = false;
-            if (valid())
+            promise_base moved;
+            moved.awaiter = this->awaiter;
+            this->awaiter = nullptr;
+            if (moved.valid())
             {
-                awaiter->bit_set |= awaiter->occupy_lock;
-                this->awaiter->set();
-                ret = true;
+                moved.awaiter->bit_set |= moved.awaiter->occupy_lock;
+                moved.awaiter->set();
+                return true;
             }
-            this->decons();
-            awaiter = nullptr;
-            return ret;
+            return false;
         }
         inline bool resolve_later();
         inline bool reject(std::error_code ec) {
-            bool ret = false;
-            if (valid())
+            promise_base moved;
+            moved.awaiter = this->awaiter;
+            this->awaiter = nullptr;
+            if (moved.valid())
             {
-                this->awaiter->no_tm.err = ec;
-                awaiter->bit_set |= awaiter->occupy_lock;
-                this->awaiter->set();
-                ret = true;
+                moved.awaiter->no_tm.err = ec;
+                moved.awaiter->bit_set |= moved.awaiter->occupy_lock;
+                moved.awaiter->set();
+                return true;
             }
-            this->decons();
-            awaiter = nullptr;
-            return ret;
+            return false;
         }
-        inline bool reject_later(std::error_code ec);
+        bool reject_later(std::error_code ec);
         inline bool reject(std::errc ec) { return reject(std::make_error_code(ec)); }
         inline bool reject_later(std::errc ec) { return reject_later(std::make_error_code(ec)); }
         bool reject(std::string_view message);

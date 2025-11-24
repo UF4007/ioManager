@@ -285,6 +285,7 @@ io::fsm_func<void> consumer_coroutine(io::future fut)
 ```
 
 > **Note:** After `prom.resolve()` is called, the promise become invalid and the future cannot be used for await operations. Must use the relative make() function for reuse.
+> - When a left-value future is being awaited, attempting to operate on it results in undefined behavior.
 
 #### Passing Data with Future/Promise
 
@@ -335,42 +336,78 @@ io::fsm_func<void> data_producer(io::promise<std::string> prom)
 
 ### Error Handling
 
-Promises can also be rejected with an error code:
+Promises can be rejected with an error code or custom error messages:
+
+#### Rejecting with Error Code
 
 ```cpp
-io::fsm_func<void> error_example()
-{
     io::fsm<void> &fsm = co_await io::get_fsm;
     
     io::future fut;
     io::promise<void> prom = fsm.make_future(fut);
     
-    // Reject the promise with an error
+    // Reject the promise with an error code
     prom.reject(std::make_error_code(std::errc::operation_canceled));
-    
-    co_return;
-}
+    // aka prom.reject(std::errc::operation_canceled);
+```
 
-io::fsm_func<void> handle_errors(std::reference_wrapper<io::future> fut_ref)
-{
+#### Rejecting with Custom Error Messages
+
+Promises can also be rejected with custom string messages:
+
+```cpp
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    
+    io::future fut;
+    io::promise<std::string> prom = fsm.make_future(fut, &fut.data);
+    
+    // Reject with a string message (lvalue reference)
+    std::string error_msg = "Database connection failed";
+    prom.reject(error_msg);  // Uses string_view internally
+```
+
+**Important Note on String Messages:** When rejecting with a string message, the `std::error_code` returned by `fut.getErr()` has the same lifetime as the `future` object. The error message becomes invalid when:
+- The future is reset by calling `fsm.make_future()` again on the same future object
+- The future is destructed
+
+Therefore, always retrieve the error message immediately after `co_await` and before any operations that might invalidate the future:
+
+```cpp
+    io::fsm<void> &fsm = co_await io::get_fsm;
+    
+    // Wait for the future
+    co_await fut_ref.get();
+    
+    // ✓ CORRECT: Access error message immediately
+    std::string error_msg = fut_ref.get().getErr().message();
+    std::cout << "Error: " << error_msg << std::endl;
+    
+    // ✗ WRONG: Do NOT store the error_code and use it later
+    // auto ec = fut_ref.get().getErr();
+    // ... some other operations ...
+    // std::cout << ec.message();  // UB: error_code may be invalid
+```
+
+#### Future Side Error Handling
+
+```cpp
     io::fsm<void> &fsm = co_await io::get_fsm;
     
     // Wait for the future to be resolved
-    co_await fut_ref.get();
+    co_await fut_ref;
     
     // Check for errors after awaiting
-    if (fut_ref.get().getErr())
+    if (fut_ref.getErr())
     {
-        std::cout << "Error: " << fut_ref.get().getErr().message() << std::endl;
+        std::cout << "Error: " << fut_ref.getErr().message() << std::endl;
     }
     else
     {
         std::cout << "Success!" << std::endl;
     }
-    
-    co_return;
-}
 ```
+
+This project does not use C++ exception handling.
 
 ### Combining Multiple Futures
 
@@ -746,13 +783,33 @@ Benchmark results on Windows environment (MSVC VS2022) with Intel Core i5-9300HF
 
 ### Coroutine Performance
 
- In 30000 coroutines:
+#### Stackless Coroutines (C++20 coroutine)
 
-- Average coroutine creation rate: ~4.8 million per second
-- Average creation time: ~208 nanoseconds
+In 30000 coroutines:
 
-- Average switching rate: ~115 million switches per second
-- Average switch time: ~8.7 nanoseconds
+- Average coroutine creation rate: ~5.13 million per second
+- Average creation time: ~195 nanoseconds
+
+- Average switching rate: ~10.65 million switches per second
+- Average switch time: ~93.9 nanoseconds
+
+#### Stackful Coroutines (minicoro)
+
+In 3000 coroutines:
+
+- Average coroutine creation rate: ~138k per second
+- Average creation time: ~7.22 microseconds
+
+- Average switching rate: ~8.51 million switches per second
+- Average switch time: ~117.6 nanoseconds
+
+**Performance Comparison:**
+
+| Metric | Stackless | Stackful | Difference |
+|--------|-----------|----------|------------|
+| Creation Speed | 195 ns | 7223 ns | **37x slower** |
+| Switch Speed | 93.9 ns | 117.6 ns | **1.25x slower** |
+| Concurrency Scale | 30000+ | < 1000 | - |
 
 *The implementation of this benchmark can be found in `demo/core/coro_benchmark.cpp`.*
 

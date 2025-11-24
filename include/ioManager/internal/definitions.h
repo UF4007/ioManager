@@ -5,6 +5,9 @@
 //awaiter
 inline void io::lowlevel::awaiter::erase_this()
 {
+    if (this->bit_set & this->has_dynamic_error) {
+        mngr->errc_pool.release(this->no_tm.err.value());
+    }
     mngr->awaiter_hive.erase(this);
 }
 inline void io::lowlevel::awaiter::queue_in(await_queue* queue)
@@ -15,6 +18,15 @@ inline void io::lowlevel::awaiter::queue_in(await_queue* queue)
     queue->lock.clear();
     mngr->suspend_release();
 }
+inline void io::lowlevel::awaiter::reset()
+{
+    if (this->bit_set & this->has_dynamic_error)
+    {
+        mngr->errc_pool.release(this->no_tm.err.value());
+    }
+    bit_set = initilaze;
+    this->no_tm.err = std::error_code();
+};
 
 
 
@@ -85,6 +97,70 @@ inline bool io::lowlevel::promise_base::reject_later(std::error_code ec) {
     }
     awaiter = nullptr;
     return ret;
+}
+inline bool io::lowlevel::promise_base::reject_later(std::string_view message)
+{
+    bool ret = false;
+    if (valid())
+    {
+        std::error_code ec(this->awaiter->mngr->errc_pool.assign(message), this->awaiter->mngr->errc_pool);
+        this->awaiter->bit_set |= this->awaiter->has_dynamic_error;
+        this->awaiter->no_tm.err = ec;
+        awaiter->no_tm.queue_next = awaiter;
+        std::swap(awaiter->no_tm.queue_next, awaiter->mngr->resolve_queue_local);
+        awaiter->mngr->suspend_release();
+        ret = true;
+    }
+    awaiter = nullptr;
+    return ret;
+}
+inline bool io::lowlevel::promise_base::reject_later(std::string &&message)
+{
+    bool ret = false;
+    if (valid())
+    {
+        std::error_code ec(this->awaiter->mngr->errc_pool.assign(std::move(message)), this->awaiter->mngr->errc_pool);
+        this->awaiter->bit_set |= this->awaiter->has_dynamic_error;
+        this->awaiter->no_tm.err = ec;
+        awaiter->no_tm.queue_next = awaiter;
+        std::swap(awaiter->no_tm.queue_next, awaiter->mngr->resolve_queue_local);
+        awaiter->mngr->suspend_release();
+        ret = true;
+    }
+    awaiter = nullptr;
+    return ret;
+}
+inline bool io::lowlevel::promise_base::reject(std::string_view message)
+{
+    promise_base moved;
+    moved.awaiter = this->awaiter;
+    this->awaiter = nullptr;
+    if (moved.valid())
+    {
+        std::error_code ec(moved.awaiter->mngr->errc_pool.assign(message), moved.awaiter->mngr->errc_pool);
+        moved.awaiter->no_tm.err = ec;
+        moved.awaiter->bit_set |= moved.awaiter->has_dynamic_error;
+        moved.awaiter->bit_set |= moved.awaiter->occupy_lock;
+        moved.awaiter->set();
+        return true;
+    }
+    return false;
+}
+inline bool io::lowlevel::promise_base::reject(std::string &&message)
+{
+    promise_base moved;
+    moved.awaiter = this->awaiter;
+    this->awaiter = nullptr;
+    if (moved.valid())
+    {
+        std::error_code ec(moved.awaiter->mngr->errc_pool.assign(std::move(message)), moved.awaiter->mngr->errc_pool);
+        moved.awaiter->no_tm.err = ec;
+        moved.awaiter->bit_set |= moved.awaiter->has_dynamic_error;
+        moved.awaiter->bit_set |= moved.awaiter->occupy_lock;
+        moved.awaiter->set();
+        return true;
+    }
+    return false;
 }
 
 

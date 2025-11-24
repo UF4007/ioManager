@@ -13,6 +13,12 @@
 #define IO_THROW(content) abort();
 #endif
 
+#if (IO_EXCEPTION_ON)
+#define IO_THROW_OR_NOT(content) throw content;
+#else
+#define IO_THROW_OR_NOT(content)
+#endif
+
 #define IO_ASSERT(___condition, ___content)                                    \
   do {                                                                         \
     if (!(___condition))                                                       \
