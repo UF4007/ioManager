@@ -442,7 +442,7 @@ namespace io {
              *
              * @tparam Out_buf_size Size of the output buffer, controls batch size per read operation.
              *                      Must be greater than 0.
-             * @tparam Is_Async If true, the protocol will be asynchronous between threads.
+             * @tparam Is_Async Auto fill when build with chan or async_chan.
              *
              */
             template <typename T, size_t Out_buf_size = 1, bool Is_Async = false>

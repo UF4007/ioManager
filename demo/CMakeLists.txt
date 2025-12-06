@@ -13,6 +13,7 @@ file(GLOB_RECURSE EXAMPLES
     "protocol/chan/*.cpp"
     "protocol/http/*.cpp"
     "protocol/kcp/*.cpp"
+    "protocol/ipc/*.cpp"
 )
 
 foreach(example ${EXAMPLES})

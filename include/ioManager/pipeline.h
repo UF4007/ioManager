@@ -596,5 +596,67 @@ namespace io {
         template <typename T> struct blackhole_protocol {
             inline void operator<<(T&) {}
         };
+
+        namespace prot {
+            template <typename In, typename Out, typename Extend>
+            struct fsm_builtin : public Extend, public io::protocol_lock<Out> {
+                io::awaitable in_ready;
+                In* in_ptr;
+                io::future out_future;
+            };
+
+            template <typename Out, typename Extend>
+            struct fsm_builtin<void, Out, Extend> : public Extend, public io::protocol_lock<Out> {
+                io::future out_future;
+            };
+
+            template <typename In, typename Extend>
+            struct fsm_builtin<In, void, Extend> : public Extend {
+                io::awaitable in_ready;
+                In* in_ptr;
+                io::promise<> recv_prom;
+            };
+
+            template <typename In, typename Out, typename Extend = std::monostate>
+            using fsm_func = io::fsm_func<fsm_builtin<In, Out, Extend>>;
+
+            template <typename In, typename Out, typename Extend>
+            struct handle : public io::fsm_handle<fsm_builtin<In, Out, Extend>> {
+                using prot_output_type = Out;
+
+                handle(fsm_func<In, Out, Extend>&& func) : io::fsm_handle<fsm_builtin<In, Out, Extend>>(
+                    io::spawn_now(std::move(func))) {
+                }
+
+                template <typename _In = In>
+                io::future operator<<(_In& input) requires(!std::is_void_v<In>) {
+                    fsm_builtin<_In, Out, Extend>* fsm = static_cast<fsm_builtin<_In, Out, Extend>*>(&**this);
+                    io::future ret;
+                    fsm->recv_prom = io::make_future(ret);
+                    if (fsm->in_ready) {
+                        fsm->in_ptr = std::addressof(input);
+                        io::awaitable awa = std::move(fsm->in_ready);
+                        awa.resume();
+                    }
+                    else {
+                        fsm->recv_prom.reject(std::errc::operation_canceled);
+                    }
+                    return ret;
+                }
+
+                template <typename _Out = Out>
+                void operator>>(io::future_with<_Out>& output) requires(!std::is_void_v<Out>) {
+                    fsm_builtin<In, _Out, Extend>* fsm = static_cast<fsm_builtin<In, _Out, Extend>*>(&**this);
+                    fsm->send_prom = io::make_future(output, &output.data);
+                    fsm->out_future.getPromise().resolve_later();
+                }
+            };
+
+            template <typename In, typename Out, typename Extend = std::monostate>
+            using fsm = io::fsm<fsm_builtin<In, Out, Extend>>;
+
+            template <typename In, typename Out, typename Extend>
+            handle(fsm_func<In, Out, Extend>&& func) -> handle<In, Out, Extend>;
+        }
     } // namespace IO_LIB_VERSION___
 } // namespace io
