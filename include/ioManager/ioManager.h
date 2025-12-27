@@ -120,7 +120,7 @@ namespace io
             inline dualbuf(Args&&... args)
                 : buffer{ _Struc(std::forward<Args>(args)...), _Struc(std::forward<Args>(args)...) } {};
             inline dualbuf() {};
-            [[nodiscard]] inline _Struc* outbound_get()
+            [[nodiscard]] inline _Struc* outbound_get() noexcept
             {
                 bool expected = true;
                 if (rotateLock.compare_exchange_strong(expected, true, std::memory_order_acquire, std::memory_order_relaxed))
@@ -139,7 +139,7 @@ namespace io
                 }
                 return nullptr;
             }
-            inline void outbound_unlock(_Struc* unlock)
+            inline void outbound_unlock(_Struc* unlock) noexcept
             {
                 if (unlock == &buffer[0])
                 {
@@ -152,15 +152,16 @@ namespace io
                 else
                     return;
             }
-            inline void outbound_rotate()
+            inline void outbound_rotate() noexcept
             {
                 bool expected = true;
                 if (rotateLock.compare_exchange_strong(expected, false) == false)
                     rotateLock.store(true, std::memory_order_seq_cst);
             }
 
-            //inbound_get cannot occupy the pointer for a long time, otherwise, it will block the reading(outbound_get)
-            [[nodiscard]] inline _Struc* inbound_get()    //if inbound gets nullptr, repeat then (spinning lock) or give in then (reentrancy)
+            // inbound_get cannot occupy the pointer for a long time, otherwise, it will block the reading(outbound_get)
+            // if inbound gets nullptr, repeat then (spinning lock) or give in then (reentrancy)
+            [[nodiscard]] inline _Struc* inbound_get() noexcept
             {
                 bool expected = false;
                 if (rotateLock.compare_exchange_strong(expected, false, std::memory_order_acquire, std::memory_order_relaxed))
@@ -175,7 +176,7 @@ namespace io
                 }
                 return nullptr;
             }
-            inline void inbound_unlock(_Struc* unlock)
+            inline void inbound_unlock(_Struc* unlock) noexcept
             {
                 if (unlock == &buffer[0])
                 {
@@ -982,7 +983,12 @@ namespace io
         struct manager {
             __IO_INTERNAL_HEADER_PERMISSION;
             inline manager() {}
-            inline void drive(){
+            inline std::chrono::nanoseconds drive(
+                bool suspends = true, 
+                std::chrono::nanoseconds suspend_max = std::chrono::nanoseconds(400000000)
+            )
+            {
+                manager *before_mngr = io::lowlevel::this_thread;
                 io::lowlevel::this_thread = this;
 
                 //pending task
@@ -1123,7 +1129,7 @@ namespace io
 #endif
 
                 //suspend
-                if (is_suspend.test() == false)
+                if (is_suspend.test() == false && suspends)
                 {
 #if IO_USE_ASIO
                     io_ctx.run_until(suspend_next);
@@ -1131,10 +1137,19 @@ namespace io
 #else
                     bool _nodiscard = suspend_sem.try_acquire_until(suspend_next);
 #endif
+                } else {
+
+#if IO_USE_ASIO
+                    io_ctx.poll();
+                    io_ctx.restart();
+#endif
+
                 }
                 is_suspend.clear();
+                
+                io::lowlevel::this_thread = before_mngr;
 
-                io::lowlevel::this_thread = nullptr;
+                return std::chrono::duration_cast<std::chrono::nanoseconds>(suspend_next - std::chrono::steady_clock::now());
             }
             
 #if IO_USE_ASIO
@@ -1365,8 +1380,6 @@ namespace io
             lowlevel::await_queue prom_decons_queue;  //async queueing to deconstruct the promise
 
             std::queue<std::coroutine_handle<>> delay_deconstruct;  //coroutines on call chain and needs deconstruct.
-
-            std::chrono::nanoseconds suspend_max = std::chrono::nanoseconds(400000000);   //defalut 400ms
 
             io::dynamic_errc errc_pool;
 
