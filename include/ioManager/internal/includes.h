@@ -92,11 +92,5 @@
 
 #if IO_USE_STACKFUL
 #define MINICORO_IMPL
-namespace io {
-    inline namespace IO_LIB_VERSION___ {
-        namespace minicoro_detail {
 #include "../minicoro/minicoro.h"
-        }
-    }
-}
 #endif

@@ -1,3 +1,8 @@
+// if you are on Windows, compiling with gcc or clang, fibers are required
+// msvc/windows or gcc/clang/linux can use assembly method which is faster
+#if defined(_WIN32)
+#define MCO_USE_FIBERS
+#endif
 #include <ioManager/ioManager.h>
 #include <ioManager/timer.h>
 

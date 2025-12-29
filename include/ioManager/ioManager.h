@@ -1124,7 +1124,7 @@ namespace io
                 {
                     auto i = stackful_deconstruct.front();
                     stackful_deconstruct.pop();
-                    minicoro_detail::mco_destroy(i);
+                    mco_destroy(i);
                 }
 #endif
 
@@ -1384,9 +1384,9 @@ namespace io
             io::dynamic_errc errc_pool;
 
 #if IO_USE_STACKFUL
-            io::minicoro_detail::mco_coro *current_stackful = nullptr;
+            mco_coro *current_stackful = nullptr;
 
-            std::queue<io::minicoro_detail::mco_coro*> stackful_deconstruct;
+            std::queue<mco_coro*> stackful_deconstruct;
 #endif
 
 #if IO_USE_ASIO
