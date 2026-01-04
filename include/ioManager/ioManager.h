@@ -1148,8 +1148,11 @@ namespace io
                 is_suspend.clear();
                 
                 io::lowlevel::this_thread = before_mngr;
-
-                return std::chrono::duration_cast<std::chrono::nanoseconds>(suspend_next - std::chrono::steady_clock::now());
+                
+                if (is_suspend.test() == false && suspends == false)
+                    return std::chrono::duration_cast<std::chrono::nanoseconds>(suspend_next - std::chrono::steady_clock::now());
+                else
+                    return std::chrono::nanoseconds{0};
             }
             
 #if IO_USE_ASIO
