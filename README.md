@@ -28,6 +28,8 @@
     </a>
 </div>
 
+# The current version of this library is deprecated, and we already have a better internal version. The current version will be batch-updated once the internal version becomes stable.
+
 # io::manager - High Performance Pipeline Concurrency Library
 
 A modern C++20 header-only library for high-performance asynchronous I/O operations and coroutine-based concurrency.
